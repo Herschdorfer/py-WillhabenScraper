@@ -11,7 +11,7 @@ import json
 from urllib.request import urlopen
 from bs4 import BeautifulSoup
 
-OPENHAB = 'openhabianpi'
+OPENHAB = 'localhost'
 
 # Data capture and upload interval in seconds. Every hour.
 INTERVAL = 60
