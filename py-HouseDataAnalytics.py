@@ -1,17 +1,11 @@
 import re
-import pandas as pd
-import numpy as np
-import seaborn as sns
-import os
 import time
-import sys
 import paho.mqtt.client as mqtt
-import json
 
 from urllib.request import urlopen
 from bs4 import BeautifulSoup
 
-OPENHAB = 'localhost'
+OPENHAB = 'openhabianpi'
 
 # Data capture and upload interval in seconds. Every hour.
 INTERVAL = 60
