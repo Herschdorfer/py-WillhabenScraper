@@ -13,14 +13,16 @@ INTERVAL = 60
 def getData():
   url = "https://www.willhaben.at/iad/immobilien/haus-kaufen/haus-angebote?PRICE_FROM=0&PRICE_TO=300000&ESTATE_SIZE/LIVING_AREA_FROM=95&areaId=3&areaId=900&&page=1&view=list&force=true"
   html = urlopen(url)
-  soup = BeautifulSoup(html, 'lxml')
+  soup = BeautifulSoup(html, 'html5lib')
   type(soup)
 
   text = str(soup)
 
-  regex = r'<span.*class=.search-count..*>([\d.]+)</span>'
+  regex = r'"numberOfItems":(\d+)'
 
   matches = re.search(regex, text)
+
+  data = ""
 
   if matches:
     if matches.groups():
@@ -38,7 +40,9 @@ client.loop_start()
 
 try:
   while True:
-    client.publish('meta/house/available', getData() , 1)
+    data = getData()
+    if (data != ""):
+      client.publish('meta/house/available', data , 1)
 
     next_reading += INTERVAL
     sleep_time = next_reading-time.time()
