@@ -74,8 +74,8 @@ async def main():
                 if data:
                     await writeData(data, i.bucket)
 
-                next_reading += INTERVAL
-                sleep_time = next_reading-time.time()
+            next_reading += INTERVAL
+            sleep_time = next_reading-time.time()
 
             if sleep_time > 0:
                 time.sleep(sleep_time)
