@@ -1,0 +1,16 @@
+[InfluxDB]
+username = db
+password = password
+server = ip
+
+[1]
+name = House
+regex = "numberOfItems":(\d+)
+url = https://www.willhaben.at/iad/immobilien/haus-kaufen/haus-angebote?PRICE_FROM=0&PRICE_TO=300000&ESTATE_SIZE/LIVING_AREA_FROM=95&areaId=3&areaId=900&&page=1&view=list&force=true
+bucket = MetaData_HouseData
+
+[2]
+name = Flat
+regex = "numberOfItems":(\d+)
+url = https://www.willhaben.at/iad/immobilien/eigentumswohnung/eigentumswohnung-angebote?sfId=50386fd0-229c-4295-90dd-ee4051fc7436&isNavigation=true&areaId=117224&areaId=117225&areaId=117226&areaId=117227&ESTATE_SIZE/LIVING_AREA_FROM=80&PRICE_TO=400000
+bucket = MetaData_FlatData
