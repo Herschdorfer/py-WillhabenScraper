@@ -8,13 +8,13 @@ from influxdb_client import Point
 from urllib.request import urlopen
 from bs4 import BeautifulSoup
 from influxdb_client.client.influxdb_client_async import InfluxDBClientAsync
-from urllib.error import HTTPError
 
 # Data capture and upload interval in seconds. Every hour.
 INTERVAL = 60
 
-parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument('-c','--conf', required='true', action='append', help='config file')
+parser = argparse.ArgumentParser(description='Simple Scrapper for willHaben data.')
+parser.add_argument('-c', '--conf', required='true',
+                    action='append', help='config file')
 
 args = parser.parse_args()
 
@@ -22,6 +22,7 @@ config = configparser.ConfigParser()
 config.sections()
 
 config.read(*args.conf)
+
 
 class ScrapingObject:
     def __init__(self, url, regex, bucket):
