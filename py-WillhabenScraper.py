@@ -2,20 +2,26 @@ import asyncio
 import re
 import time
 import configparser
+import argparse
 
 from influxdb_client import Point
 from urllib.request import urlopen
 from bs4 import BeautifulSoup
 from influxdb_client.client.influxdb_client_async import InfluxDBClientAsync
+from urllib.error import HTTPError
 
 # Data capture and upload interval in seconds. Every hour.
 INTERVAL = 60
 
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('-c','--conf', required='true', action='append', help='config file')
+
+args = parser.parse_args()
+
 config = configparser.ConfigParser()
 config.sections()
 
-config.read('.config')
-
+config.read(*args.conf)
 
 class ScrapingObject:
     def __init__(self, url, regex, bucket):
@@ -69,10 +75,13 @@ async def main():
     next_reading = time.time()
     try:
         while True:
-            for i in objects:
-                data = getData(i.url, i.regex)
-                if data:
-                    await writeData(data, i.bucket)
+            try:
+                for i in objects:
+                    data = getData(i.url, i.regex)
+                    if data:
+                        await writeData(data, i.bucket)
+            except Exception as err:
+                print(f"got http error {err}")
 
             next_reading += INTERVAL
             sleep_time = next_reading-time.time()
