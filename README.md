@@ -9,7 +9,7 @@ The result will be written to a configured Influx database for later use, eg. a 
 
 Configuration | Explanaton                           | Example
 --------------|--------------------------------------|--------
-name          | Simple name, not used for processing |
+name          | Simple name, not used for processing | -
 regex         | Regular Expression for lookup        | "numberOfItems":(\d+)
 url           | URL to access                        | https://www.willhaben.at/
 bucket        | Bucket in Influx to save the data    | MetaData_HouseData
