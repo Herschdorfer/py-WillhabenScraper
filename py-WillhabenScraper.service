@@ -1,17 +1,17 @@
 [Unit]
 Description=Willhaben Meta Data Scrapper
 After=multi-user.target
- 
+
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /home/openhabian/py-HouseDataAnalytics/py-HouseDataAnalytics.py
+ExecStart=/usr/bin/python3 /home/openhabian/py-WillhabenScraper/py-WillhabenScraper.py
 Restart=on-abort
- 
+
 [Install]
 WantedBy=multi-user.target
 
-#copy to /lib/systemd/system/py-HouseDataAnalytics.service and execute 
-#sudo systemctl enable py-HouseDataAnalytics.service
-#sudo systemctl start py-HouseDataAnalytics.service
-#sudo systemctl status py-HouseDataAnalytics.service
-#sudo journalctl -f -u py-HouseDataAnalytics.service
+#copy to /lib/systemd/system/py-WillhabenScraper.service and execute
+#sudo systemctl enable py-WillhabenScraper.service
+#sudo systemctl start py-WillhabenScraper.service
+#sudo systemctl status py-WillhabenScraper.service
+#sudo journalctl -f -u py-WillhabenScraper.service
