@@ -105,3 +105,6 @@ venv.bak/
 
 # do not commit config
 .config
+
+# ignore vs-code
+.vscode

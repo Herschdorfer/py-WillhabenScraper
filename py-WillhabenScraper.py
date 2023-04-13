@@ -3,18 +3,20 @@ import re
 import time
 import configparser
 import argparse
+import influxdb_client
 
-from influxdb_client import Point
 from urllib.request import urlopen
 from bs4 import BeautifulSoup
-from influxdb_client.client.influxdb_client_async import InfluxDBClientAsync
+from influxdb_client import Point
+from influxdb_client.client.write_api import SYNCHRONOUS
 
 # Data capture and upload interval in seconds. Every hour.
 INTERVAL = 60
 
-parser = argparse.ArgumentParser(description='Simple Scrapper for willHaben data.')
-parser.add_argument('-c', '--conf', required='true',
-                    action='append', help='config file')
+parser = argparse.ArgumentParser(description="Simple Scrapper for willHaben data.")
+parser.add_argument(
+    "-c", "--conf", required="true", action="append", help="config file"
+)
 
 args = parser.parse_args()
 
@@ -25,24 +27,27 @@ config.read(*args.conf)
 
 
 class ScrapingObject:
-    def __init__(self, url, regex, bucket):
+    def __init__(self, url, regex, measurement):
         self.url = url
         self.regex = regex
-        self.bucket = bucket
+        self.measurement = measurement
 
 
 objects = []
 
 for key in config:
     if key.isdigit():
-        objects.append(ScrapingObject(
-            config[key]['url'], config[key]['regex'], config[key]['bucket']))
+        objects.append(
+            ScrapingObject(
+                config[key]["url"], config[key]["regex"], config[key]["measurement"]
+            )
+        )
 
 
 def getData(url, regex):
     url = url
     html = urlopen(url)
-    soup = BeautifulSoup(html, 'html5lib')
+    soup = BeautifulSoup(html, "html5lib")
     type(soup)
 
     text = str(soup)
@@ -56,23 +61,22 @@ def getData(url, regex):
             data = matches.group(1)
             print("{group}".format(group=data))
 
-    return data.replace('.', '')
+    return data.replace(".", "")
 
 
-async def writeData(data, bucket):
-    username = config['InfluxDB']['username']
-    password = config['InfluxDB']['password']
-    server = config['InfluxDB']['server']
+def writeData(data, measurement):
+    token = config["InfluxDB"]["token"]
+    org = config["InfluxDB"]["org"]
+    server = config["InfluxDB"]["server"]
+    bucket = config["InfluxDB"]["bucket"]
 
-    async with InfluxDBClientAsync(url=server, token=f'{username}:{password}', org='-') as client:
-        write_api = client.write_api()
-        _point1 = Point(bucket).field("value", int(data))
-        successfully = await write_api.write(bucket="openhab_db", record=[_point1])
-        if successfully:
-            print(f"successfully wrote data to InfluxDB")
+    with influxdb_client.InfluxDBClient(url=server, token=token, org=org) as client:
+        write_api = client.write_api(write_options=SYNCHRONOUS)
+        point = Point(measurement).field("value", int(data))
+        write_api.write(bucket=bucket, record=point)
 
 
-async def main():
+def main():
     next_reading = time.time()
     try:
         while True:
@@ -80,17 +84,18 @@ async def main():
                 for i in objects:
                     data = getData(i.url, i.regex)
                     if data:
-                        await writeData(data, i.bucket)
+                        writeData(data, i.measurement)
             except Exception as err:
                 print(f"got http error {err}")
 
             next_reading += INTERVAL
-            sleep_time = next_reading-time.time()
+            sleep_time = next_reading - time.time()
 
             if sleep_time > 0:
                 time.sleep(sleep_time)
     except KeyboardInterrupt:
         pass
+
 
 if __name__ == "__main__":
     asyncio.run(main())
