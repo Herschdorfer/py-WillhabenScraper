@@ -80,13 +80,13 @@ def main():
     next_reading = time.time()
     try:
         while True:
-            try:
-                for i in objects:
+            for i in objects:
+                try:
                     data = getData(i.url, i.regex)
                     if data:
                         writeData(data, i.measurement)
-            except Exception as err:
-                print(f"got http error {err}")
+                except Exception as err:
+                    print(f"got error {err}")
 
             next_reading += INTERVAL
             sleep_time = next_reading - time.time()
