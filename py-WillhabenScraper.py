@@ -5,10 +5,9 @@ import configparser
 import argparse
 import influxdb_client
 
-from urllib.request import urlopen
-from bs4 import BeautifulSoup
 from influxdb_client import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
+import requests
 
 # Data capture and upload interval in seconds. Every hour.
 INTERVAL = 60
@@ -27,6 +26,15 @@ config.read(*args.conf)
 
 
 class ScrapingObject:
+    """
+    Represents an object used for web scraping.
+
+    Attributes:
+        url (str): The URL of the webpage to scrape.
+        regex (str): The regular expression pattern used to extract data from the webpage.
+        measurement (str): The unit of measurement for the extracted data.
+    """
+
     def __init__(self, url, regex, measurement):
         self.url = url
         self.regex = regex
@@ -44,27 +52,44 @@ for key in config:
         )
 
 
-def getData(url, regex):
-    url = url
-    html = urlopen(url)
-    soup = BeautifulSoup(html, "html5lib")
-    type(soup)
+def get_data(url, regex):
+    """
+    Retrieves data from a given URL using a regular expression.
 
-    text = str(soup)
+    Args:
+        url (str): The URL to scrape data from.
+        regex (str): The regular expression pattern to search for in the scraped data.
 
-    matches = re.search(regex, text)
+    Returns:
+        str: The extracted data from the URL, with any dots removed.
+    """
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
+    }
+
+    response = requests.get(url, headers=headers, timeout=10)
+
+    matches = re.search(regex, response.text)
 
     data = ""
 
-    if matches:
-        if matches.groups():
-            data = matches.group(1)
-            print("{group}".format(group=data))
+    if matches and matches.groups:
+        data = matches.group(1)
 
     return data.replace(".", "")
 
 
-def writeData(data, measurement):
+def write_data(data, measurement):
+    """
+    Writes data to InfluxDB.
+
+    Args:
+        data: The data to be written.
+        measurement: The measurement name for the data.
+
+    Returns:
+        None
+    """
     token = config["InfluxDB"]["token"]
     org = config["InfluxDB"]["org"]
     server = config["InfluxDB"]["server"]
@@ -82,9 +107,12 @@ def main():
         while True:
             for i in objects:
                 try:
-                    data = getData(i.url, i.regex)
+                    data = get_data(i.url, i.regex)
+
+                    print(f"Got data {data} for {i.measurement}")
+
                     if data:
-                        writeData(data, i.measurement)
+                        write_data(data, i.measurement)
                 except Exception as err:
                     print(f"got error {err}")
 
