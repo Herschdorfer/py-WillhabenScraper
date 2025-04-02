@@ -33,6 +33,7 @@ class ScrapingObject:
         url (str): The URL of the webpage to scrape.
         regex (str): The regular expression pattern used to extract data from the webpage.
         measurement (str): The unit of measurement for the extracted data.
+        operation (str): The operation to perform on the extracted data (e.g., average, min).
     """
 
     def __init__(self, url, regex, measurement, operation):
@@ -48,19 +49,19 @@ for key in config:
     if key.isdigit():
         objects.append(
             ScrapingObject(
-                config[key]["url"], config[key]["regex"], config[key]["measurement"], config[key].get("operation", False)
+                config[key]["url"], config[key]["regex"], config[key]["measurement"], config[key].get("operation", "")
             )
         )
 
 
-def get_data(url, regex, average):
+def get_data(url, regex, operation):
     """
     Retrieves data from a given URL using a regular expression.
 
     Args:
         url (str): The URL to scrape data from.
         regex (str): The regular expression pattern to search for in the scraped data.
-        average (bool): If True, calculates the average of the matched data.
+        operation (str): The operation to perform on the extracted data currently only average or min.
 
     Returns:
         str: The extracted data from the URL, with any dots removed.
@@ -77,7 +78,9 @@ def get_data(url, regex, average):
 
     print(f"Got {len(matches)} matches for {url}")
 
-    if average:
+    print(f"Got {operation} operation for {url}")
+
+    if operation == "average":
         average = 0
         for match in matches:
             average += int(match)
@@ -127,7 +130,7 @@ def main():
         while True:
             for i in objects:
                 try:
-                    data = get_data(i.url, i.regex, i.operation == "average")
+                    data = get_data(i.url, i.regex, i.operation)
 
                     print(f"Got data {data} for {i.measurement}")
 
