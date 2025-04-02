@@ -35,10 +35,11 @@ class ScrapingObject:
         measurement (str): The unit of measurement for the extracted data.
     """
 
-    def __init__(self, url, regex, measurement):
+    def __init__(self, url, regex, measurement, operation):
         self.url = url
         self.regex = regex
         self.measurement = measurement
+        self.operation = operation
 
 
 objects = []
@@ -47,18 +48,19 @@ for key in config:
     if key.isdigit():
         objects.append(
             ScrapingObject(
-                config[key]["url"], config[key]["regex"], config[key]["measurement"]
+                config[key]["url"], config[key]["regex"], config[key]["measurement"], config[key].get("operation", False)
             )
         )
 
 
-def get_data(url, regex):
+def get_data(url, regex, average):
     """
     Retrieves data from a given URL using a regular expression.
 
     Args:
         url (str): The URL to scrape data from.
         regex (str): The regular expression pattern to search for in the scraped data.
+        average (bool): If True, calculates the average of the matched data.
 
     Returns:
         str: The extracted data from the URL, with any dots removed.
@@ -74,11 +76,23 @@ def get_data(url, regex):
     data = ""
 
     print(f"Got {len(matches)} matches for {url}")
-    average = 0
-    for match in matches:
-        average += int(match)
-    average = average / len(matches)
-    data = str(int(average))
+
+    if average:
+        average = 0
+        for match in matches:
+            average += int(match)
+
+
+        average = average / len(matches)
+        data = str(int(average))
+    else: # take the lowest value
+        current = 0
+        for match in matches:
+            if current == 0:
+                current = int(match)
+            else:
+                current = min(current, int(match))
+        data = str(current)
 
     print(f"Got data {data} for {url}")
 
@@ -113,7 +127,7 @@ def main():
         while True:
             for i in objects:
                 try:
-                    data = get_data(i.url, i.regex)
+                    data = get_data(i.url, i.regex, i.operation == "average")
 
                     print(f"Got data {data} for {i.measurement}")
 
