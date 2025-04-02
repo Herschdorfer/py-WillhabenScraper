@@ -69,14 +69,20 @@ def get_data(url, regex):
 
     response = requests.get(url, headers=headers, timeout=10)
 
-    matches = re.search(regex, response.text)
+    matches = re.findall(regex, response.text)
 
     data = ""
 
-    if matches and matches.groups:
-        data = matches.group(1)
+    print(f"Got {len(matches)} matches for {url}")
+    average = 0
+    for match in matches:
+        average += int(match)
+    average = average / len(matches)
+    data = str(int(average))
 
-    return data.replace(".", "")
+    print(f"Got data {data} for {url}")
+
+    return data
 
 
 def write_data(data, measurement):
