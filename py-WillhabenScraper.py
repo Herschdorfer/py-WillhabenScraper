@@ -88,6 +88,14 @@ def get_data(url, regex, operation):
 
         average = average / len(matches)
         data = str(int(average))
+    elif operation == "median":
+        matches = sorted([int(match) for match in matches])
+        mid = len(matches) // 2
+        if len(matches) % 2 == 0:
+            median = (matches[mid - 1] + matches[mid]) / 2
+        else:
+            median = matches[mid]
+        data = str(int(median))
     else: # take the lowest value
         current = 0
         for match in matches:
