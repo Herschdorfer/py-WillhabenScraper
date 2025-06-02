@@ -49,7 +49,10 @@ for key in config:
     if key.isdigit():
         objects.append(
             ScrapingObject(
-                config[key]["url"], config[key]["regex"], config[key]["measurement"], config[key].get("operation", "")
+                config[key]["url"],
+                config[key]["regex"],
+                config[key]["measurement"],
+                config[key].get("operation", "")
             )
         )
 
@@ -85,7 +88,6 @@ def get_data(url, regex, operation):
         for match in matches:
             average += int(match)
 
-
         average = average / len(matches)
         data = str(int(average))
     elif operation == "median":
@@ -96,7 +98,27 @@ def get_data(url, regex, operation):
         else:
             median = matches[mid]
         data = str(int(median))
-    else: # take the lowest value
+    elif operation == "mode": # calculate the mode with bucket size of 50
+        bucket_size = 50
+        matches = [int(match) for match in matches]
+        matches = [int((match // bucket_size) * bucket_size) for match in matches]  # Group by tens
+        frequency = {}
+        for match in matches:
+            if match in frequency:
+                frequency[match] += 1
+            else:
+                frequency[match] = 1
+        mode = max(frequency, key=frequency.get)
+        data = str(mode+bucket_size)  # Add the bucket_size to get the upper limit of the bucket
+    elif operation == "max":  # take the highest value
+        current = 0
+        for match in matches:
+            if current == 0:
+                current = int(match)
+            else:
+                current = max(current, int(match))
+        data = str(current)
+    else: # default take the lowest value
         current = 0
         for match in matches:
             if current == 0:
