@@ -7,7 +7,8 @@ import influxdb_client
 
 from influxdb_client import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
-import requests
+
+from urllib.request import urlopen, Request
 
 # Data capture and upload interval in seconds. Every hour.
 INTERVAL = 60
@@ -52,7 +53,7 @@ for key in config:
                 config[key]["url"],
                 config[key]["regex"],
                 config[key]["measurement"],
-                config[key].get("operation", "")
+                config[key].get("operation", ""),
             )
         )
 
@@ -69,13 +70,29 @@ def get_data(url, regex, operation):
     Returns:
         str: The extracted data from the URL, with any dots removed.
     """
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36',
-    }
+    req = Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+        },
+    )
 
-    response = requests.get(url, headers=headers, timeout=10)
+    # Fetch the content of the URL
+    try:
+        response = urlopen(req)
+    except Exception as e:
+        print(f"Error fetching {url}: {e}")
+        return ""
+    if response.getcode() != 200:
+        print(f"Error: {response.getcode()} for {url}")
+        return ""
+    if not response.readable():
+        print(f"Error: No content for {url}")
+        return ""
+    # Read the response content
+    response = response.read().decode("utf-8")
 
-    matches = re.findall(regex, response.text)
+    matches = re.findall(regex, response)
 
     data = ""
 
@@ -98,10 +115,12 @@ def get_data(url, regex, operation):
         else:
             median = matches[mid]
         data = str(int(median))
-    elif operation == "mode": # calculate the mode with bucket size of 50
+    elif operation == "mode":  # calculate the mode with bucket size of 50
         bucket_size = 50
         matches = [int(match) for match in matches]
-        matches = [int((match // bucket_size) * bucket_size) for match in matches]  # Group by tens
+        matches = [
+            int((match // bucket_size) * bucket_size) for match in matches
+        ]  # Group by tens
         frequency = {}
         for match in matches:
             if match in frequency:
@@ -109,7 +128,9 @@ def get_data(url, regex, operation):
             else:
                 frequency[match] = 1
         mode = max(frequency, key=frequency.get)
-        data = str(mode+bucket_size)  # Add the bucket_size to get the upper limit of the bucket
+        data = str(
+            mode + bucket_size
+        )  # Add the bucket_size to get the upper limit of the bucket
     elif operation == "max":  # take the highest value
         current = 0
         for match in matches:
@@ -118,7 +139,7 @@ def get_data(url, regex, operation):
             else:
                 current = max(current, int(match))
         data = str(current)
-    else: # default take the lowest value
+    else:  # default take the lowest value
         current = 0
         for match in matches:
             if current == 0:
