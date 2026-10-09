@@ -3,6 +3,7 @@ import time
 import configparser
 import argparse
 from collections import Counter
+from math import ceil
 from statistics import mean, median
 import influxdb_client
 import requests
@@ -155,7 +156,7 @@ def write_data(data, measurement, config):
 
 
 def run_scraper(config, objects, interval):
-    next_reading = time.time()
+    next_reading = time.monotonic()
     try:
         while True:
             for scraping_object in objects:
@@ -174,10 +175,11 @@ def run_scraper(config, objects, interval):
                     print(f"got error {err}")
 
             next_reading += interval
-            sleep_time = next_reading - time.time()
-
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+            now = time.monotonic()
+            if now > next_reading:
+                missed_intervals = ceil((now - next_reading) / interval)
+                next_reading += missed_intervals * interval
+            time.sleep(next_reading - now)
     except KeyboardInterrupt:
         pass
 
