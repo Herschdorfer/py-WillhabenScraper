@@ -6,6 +6,7 @@ import signal
 import logging
 from urllib.parse import urlsplit
 from collections import Counter
+from math import ceil
 from statistics import mean, median
 import influxdb_client
 import requests
@@ -117,6 +118,8 @@ def get_data(url, regex, operation, http_client=None):
         url (str): The URL to scrape data from.
         regex (str): The regular expression pattern to search for in the scraped data.
         operation (str): The aggregation operation to perform on integer matches.
+        http_client: Optional requests-compatible object with a get method.
+            Defaults to the requests module when omitted.
 
     Returns:
         str: The integer aggregate, or an empty string when there is no usable data.
@@ -222,8 +225,8 @@ def run_scraper(config, objects, interval, http_client=None):
 
             next_reading += interval
             now = time.monotonic()
-            if now >= next_reading:
-                missed_intervals = int((now - next_reading) // interval) + 1
+            if now > next_reading:
+                missed_intervals = ceil((now - next_reading) / interval)
                 next_reading += missed_intervals * interval
             time.sleep(next_reading - now)
     except KeyboardInterrupt:
@@ -247,10 +250,13 @@ def main(argv=None):
         config, objects, interval = load_config(args.conf)
     except (OSError, ValueError, configparser.Error) as error:
         parser.error(str(error))
-    previous_handler = signal.signal(signal.SIGTERM, handle_termination)
+    previous_handler = signal.getsignal(signal.SIGTERM)
     try:
+        signal.signal(signal.SIGTERM, handle_termination)
         with create_http_session() as http_client:
             run_scraper(config, objects, interval, http_client)
+    except KeyboardInterrupt:
+        pass
     finally:
         signal.signal(signal.SIGTERM, previous_handler)
     return 0
