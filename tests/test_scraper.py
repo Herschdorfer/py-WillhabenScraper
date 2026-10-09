@@ -235,10 +235,29 @@ class ScraperTests(unittest.TestCase):
             patch.object(
                 self.scraper.time,
                 "sleep",
-                side_effect=lambda delay: self.scraper.handle_termination(
-                    self.scraper.signal.SIGTERM, None
-                ),
+                side_effect=lambda delay: self.scraper.signal.getsignal(
+                    self.scraper.signal.SIGTERM
+                )(self.scraper.signal.SIGTERM, None),
             ),
+        ):
+            self.assertEqual(
+                self.scraper.main(["-c", str(ROOT / ".config.example")]), 0
+            )
+        self.assertEqual(
+            self.scraper.signal.getsignal(self.scraper.signal.SIGTERM), previous_handler
+        )
+
+    def test_main_restores_handler_when_installation_is_interrupted(self):
+        previous_handler = self.scraper.signal.getsignal(self.scraper.signal.SIGTERM)
+        original_install = self.scraper.signal.signal
+
+        def interrupted_install(signum, handler):
+            original_install(signum, handler)
+            if handler is self.scraper.handle_termination:
+                raise KeyboardInterrupt
+
+        with patch.object(
+            self.scraper.signal, "signal", side_effect=interrupted_install
         ):
             self.assertEqual(
                 self.scraper.main(["-c", str(ROOT / ".config.example")]), 0
@@ -346,6 +365,21 @@ class ScraperTests(unittest.TestCase):
         ):
             self.scraper.run_scraper(self.config, self.objects, self.interval)
         sleep.assert_called_once_with(899)
+
+    def test_scheduler_runs_immediately_at_due_boundaries(self):
+        for now, expected_wait in ((3700, 0), (7300, 0), (3701, 3599)):
+            with self.subTest(now=now):
+                with (
+                    patch.object(self.scraper, "get_data", return_value=""),
+                    patch.object(
+                        self.scraper.time, "monotonic", side_effect=[100, now]
+                    ),
+                    patch.object(
+                        self.scraper.time, "sleep", side_effect=KeyboardInterrupt
+                    ) as sleep,
+                ):
+                    self.scraper.run_scraper(self.config, self.objects, self.interval)
+                sleep.assert_called_once_with(expected_wait)
 
     def test_cli_help(self):
         result = subprocess.run(
