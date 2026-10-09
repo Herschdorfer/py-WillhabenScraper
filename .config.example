@@ -4,6 +4,10 @@ org    = example-org
 bucket = example-bucket
 server = ip
 
+[Scraper]
+# seconds between two scraping runs (default 3600)
+interval = 3600
+
 [1]
 name        = House
 regex       = "numberOfItems":(\d+)

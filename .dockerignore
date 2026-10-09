@@ -1,0 +1,9 @@
+.git
+.venv
+.config
+*.html
+__pycache__
+.github
+.ruff_cache
+.pytest_cache
+tests
