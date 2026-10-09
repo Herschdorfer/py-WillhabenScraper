@@ -1,29 +1,16 @@
-import asyncio
 import re
 import time
 import configparser
 import argparse
+from collections import Counter
+from statistics import mean, median
 import influxdb_client
+import requests
 
 from influxdb_client import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
-from urllib.request import urlopen, Request
-
-# Data capture and upload interval in seconds. Every hour.
-INTERVAL = 60
-
-parser = argparse.ArgumentParser(description="Simple Scrapper for willHaben data.")
-parser.add_argument(
-    "-c", "--conf", required="true", action="append", help="config file"
-)
-
-args = parser.parse_args()
-
-config = configparser.ConfigParser()
-config.sections()
-
-config.read(*args.conf)
+HTTP_TIMEOUT = 30
 
 
 class ScrapingObject:
@@ -44,18 +31,49 @@ class ScrapingObject:
         self.operation = operation
 
 
-objects = []
+def load_search(section, settings):
+    for key in ("url", "regex", "measurement"):
+        if not settings.get(key, "").strip():
+            raise ValueError(f"Missing [{section}] {key}")
+    operation = settings.get("operation", "")
+    if operation not in ("", "min", "max", "average", "median", "mode"):
+        raise ValueError(f"Unsupported operation in [{section}]: {operation}")
+    try:
+        pattern = re.compile(settings["regex"])
+    except re.error as error:
+        raise ValueError(f"Invalid regex in [{section}]: {error}") from error
+    if pattern.groups > 1:
+        raise ValueError(f"Regex in [{section}] must have at most one capture group")
+    return ScrapingObject(
+        settings["url"], settings["regex"], settings["measurement"], operation
+    )
 
-for key in config:
-    if key.isdigit():
-        objects.append(
-            ScrapingObject(
-                config[key]["url"],
-                config[key]["regex"],
-                config[key]["measurement"],
-                config[key].get("operation", ""),
-            )
-        )
+
+def load_config(paths):
+    config = configparser.ConfigParser(interpolation=None)
+    loaded = config.read(paths, encoding="utf-8")
+    missing = [path for path in paths if path not in loaded]
+    if missing:
+        raise ValueError(f"Cannot read config files: {', '.join(missing)}")
+
+    if not config.has_section("InfluxDB"):
+        raise ValueError("Missing [InfluxDB] section")
+    for key in ("token", "org", "server", "bucket"):
+        if not config["InfluxDB"].get(key, "").strip():
+            raise ValueError(f"Missing [InfluxDB] {key}")
+
+    interval = config.getint("Scraper", "interval", fallback=3600)
+    if interval <= 0:
+        raise ValueError("[Scraper] interval must be positive")
+
+    objects = [
+        load_search(section, config[section])
+        for section in config.sections()
+        if section.isdigit()
+    ]
+    if not objects:
+        raise ValueError("At least one numbered search section is required")
+    return config, objects, interval
 
 
 def get_data(url, regex, operation):
@@ -65,95 +83,56 @@ def get_data(url, regex, operation):
     Args:
         url (str): The URL to scrape data from.
         regex (str): The regular expression pattern to search for in the scraped data.
-        operation (str): The operation to perform on the extracted data currently only average or min.
+        operation (str): The aggregation operation to perform on integer matches.
 
     Returns:
-        str: The extracted data from the URL, with any dots removed.
+        str: The integer aggregate, or an empty string when there is no usable data.
     """
-    req = Request(
-        url,
-        headers={
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-        },
-    )
-
-    # Fetch the content of the URL
     try:
-        response = urlopen(req)
-    except Exception as e:
-        print(f"Error fetching {url}: {e}")
+        with requests.get(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
+            },
+            timeout=HTTP_TIMEOUT,
+        ) as response:
+            if response.status_code != 200:
+                print(f"Error: {response.status_code} for {url}")
+                return ""
+            content = response.content.decode("utf-8")
+    except (requests.RequestException, UnicodeError) as error:
+        print(f"Error fetching {url}: {error}")
         return ""
-    if response.getcode() != 200:
-        print(f"Error: {response.getcode()} for {url}")
-        return ""
-    if not response.readable():
-        print(f"Error: No content for {url}")
-        return ""
-    # Read the response content
-    response = response.read().decode("utf-8")
 
-    matches = re.findall(regex, response)
-
-    data = ""
-
+    matches = re.findall(regex, content)
     print(f"Got {len(matches)} matches for {url}")
-
     print(f"Got {operation} operation for {url}")
-
+    if not matches:
+        return ""
+    try:
+        values = [int(match) for match in matches]
+    except (TypeError, ValueError):
+        print(f"Error: Non-integer matches for {url}")
+        return ""
     if operation == "average":
-        average = 0
-        for match in matches:
-            average += int(match)
-
-        average = average / len(matches)
-        data = str(int(average))
+        value = int(mean(values))
     elif operation == "median":
-        matches = sorted([int(match) for match in matches])
-        mid = len(matches) // 2
-        if len(matches) % 2 == 0:
-            median = (matches[mid - 1] + matches[mid]) / 2
-        else:
-            median = matches[mid]
-        data = str(int(median))
-    elif operation == "mode":  # calculate the mode with bucket size of 50
+        value = int(median(values))
+    elif operation == "mode":
         bucket_size = 50
-        matches = [int(match) for match in matches]
-        matches = [
-            int((match // bucket_size) * bucket_size) for match in matches
-        ]  # Group by tens
-        frequency = {}
-        for match in matches:
-            if match in frequency:
-                frequency[match] += 1
-            else:
-                frequency[match] = 1
-        mode = max(frequency, key=frequency.get)
-        data = str(
-            mode + bucket_size
-        )  # Add the bucket_size to get the upper limit of the bucket
-    elif operation == "max":  # take the highest value
-        current = 0
-        for match in matches:
-            if current == 0:
-                current = int(match)
-            else:
-                current = max(current, int(match))
-        data = str(current)
-    else:  # default take the lowest value
-        current = 0
-        for match in matches:
-            if current == 0:
-                current = int(match)
-            else:
-                current = min(current, int(match))
-        data = str(current)
-
+        frequency = Counter(value // bucket_size * bucket_size for value in values)
+        value = frequency.most_common(1)[0][0] + bucket_size
+    elif operation == "max":
+        value = max(values)
+    else:
+        value = min(values)
+    data = str(value)
     print(f"Got data {data} for {url}")
 
     return data
 
 
-def write_data(data, measurement):
+def write_data(data, measurement, config):
     """
     Writes data to InfluxDB.
 
@@ -175,22 +154,26 @@ def write_data(data, measurement):
         write_api.write(bucket=bucket, record=point)
 
 
-def main():
+def run_scraper(config, objects, interval):
     next_reading = time.time()
     try:
         while True:
-            for i in objects:
+            for scraping_object in objects:
                 try:
-                    data = get_data(i.url, i.regex, i.operation)
+                    data = get_data(
+                        scraping_object.url,
+                        scraping_object.regex,
+                        scraping_object.operation,
+                    )
 
-                    print(f"Got data {data} for {i.measurement}")
+                    print(f"Got data {data} for {scraping_object.measurement}")
 
                     if data:
-                        write_data(data, i.measurement)
+                        write_data(data, scraping_object.measurement, config)
                 except Exception as err:
                     print(f"got error {err}")
 
-            next_reading += INTERVAL
+            next_reading += interval
             sleep_time = next_reading - time.time()
 
             if sleep_time > 0:
@@ -199,5 +182,19 @@ def main():
         pass
 
 
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Simple scraper for willHaben data.")
+    parser.add_argument(
+        "-c", "--conf", required=True, action="append", help="config file"
+    )
+    args = parser.parse_args(argv)
+    try:
+        config, objects, interval = load_config(args.conf)
+    except (OSError, ValueError, configparser.Error) as error:
+        parser.error(str(error))
+    run_scraper(config, objects, interval)
+    return 0
+
+
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(main())

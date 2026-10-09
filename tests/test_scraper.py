@@ -1,0 +1,282 @@
+import importlib.util
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+from unittest.mock import MagicMock, patch
+from requests.exceptions import ConnectionError, Timeout
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPT = ROOT / "py-WillhabenScraper.py"
+
+
+class ScraperTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        spec = importlib.util.spec_from_file_location("scraper", SCRIPT)
+        cls.scraper = importlib.util.module_from_spec(spec)
+        with patch.object(sys, "argv", ["test-runner", "--unrelated"]):
+            spec.loader.exec_module(cls.scraper)
+        cls.config, cls.objects, cls.interval = cls.scraper.load_config(
+            [str(ROOT / ".config.example")]
+        )
+
+    def load_settings(self, text):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.ini"
+            path.write_text(text, encoding="utf-8")
+            return self.scraper.load_config([str(path)])
+
+    def response(self, content, status=200):
+        response = MagicMock(status_code=status, content=content.encode("utf-8"))
+        response.__enter__.return_value = response
+        return response
+
+    def test_aggregation_operations(self):
+        cases = [
+            ("", "10 30 20", "10"),
+            ("min", "10 30 20", "10"),
+            ("max", "10 30 20", "30"),
+            ("average", "10 30 20", "20"),
+            ("average", "10 11", "10"),
+            ("median", "30 10 20", "20"),
+            ("median", "40 10 30 20", "25"),
+            ("mode", "110 120 130 210", "150"),
+            ("min", "0 10", "0"),
+            ("max", "0 10", "10"),
+            ("mode", "10 60", "50"),
+        ]
+        for operation, content, expected in cases:
+            with self.subTest(operation=operation, content=content):
+                with patch.object(
+                    self.scraper.requests, "get", return_value=self.response(content)
+                ):
+                    result = self.scraper.get_data(
+                        "https://example.com", r"\d+", operation
+                    )
+                self.assertEqual(result, expected)
+
+    def test_no_matches_skip_every_operation(self):
+        for operation in ("", "min", "max", "average", "median", "mode"):
+            with self.subTest(operation=operation):
+                with patch.object(
+                    self.scraper.requests,
+                    "get",
+                    return_value=self.response("no matches"),
+                ):
+                    self.assertEqual(
+                        self.scraper.get_data("https://example.com", r"\d+", operation),
+                        "",
+                    )
+
+    def test_negative_values(self):
+        for operation, expected in (("min", "-10"), ("max", "-5"), ("average", "-7")):
+            with self.subTest(operation=operation):
+                with patch.object(
+                    self.scraper.requests, "get", return_value=self.response("-10 -5")
+                ):
+                    self.assertEqual(
+                        self.scraper.get_data(
+                            "https://example.com", r"-?\d+", operation
+                        ),
+                        expected,
+                    )
+
+    def test_non_integer_matches_are_skipped(self):
+        with patch.object(
+            self.scraper.requests, "get", return_value=self.response("invalid")
+        ):
+            self.assertEqual(
+                self.scraper.get_data("https://example.com", r"\w+", "average"), ""
+            )
+
+    def test_request_has_user_agent(self):
+        response = self.response('"numberOfItems":42')
+        with patch.object(self.scraper.requests, "get", return_value=response) as fetch:
+            self.assertEqual(
+                self.scraper.get_data(
+                    "https://example.com", r'"numberOfItems":(\d+)', ""
+                ),
+                "42",
+            )
+        self.assertEqual(fetch.call_args.args[0], "https://example.com")
+        self.assertIn("Mozilla", fetch.call_args.kwargs["headers"]["User-Agent"])
+        self.assertEqual(fetch.call_args.kwargs["timeout"], 30)
+        response.__exit__.assert_called_once()
+
+    def test_fetch_failure_returns_empty(self):
+        with patch.object(
+            self.scraper.requests, "get", side_effect=ConnectionError("offline")
+        ):
+            self.assertEqual(
+                self.scraper.get_data("https://example.com", r"\d+", ""), ""
+            )
+
+    def test_timeout_returns_empty(self):
+        with patch.object(
+            self.scraper.requests, "get", side_effect=Timeout("timed out")
+        ):
+            self.assertEqual(
+                self.scraper.get_data("https://example.com", r"\d+", ""), ""
+            )
+
+    def test_decode_failure_returns_empty_and_closes_response(self):
+        response = self.response("")
+        response.content = b"\xff"
+        with patch.object(self.scraper.requests, "get", return_value=response):
+            self.assertEqual(
+                self.scraper.get_data("https://example.com", r"\d+", ""), ""
+            )
+        response.__exit__.assert_called_once()
+
+    def test_non_success_response_returns_empty(self):
+        response = self.response("42", status=503)
+        with patch.object(self.scraper.requests, "get", return_value=response):
+            self.assertEqual(
+                self.scraper.get_data("https://example.com", r"\d+", ""), ""
+            )
+        response.__exit__.assert_called_once()
+
+    def test_empty_response_returns_empty(self):
+        response = self.response("")
+        with patch.object(self.scraper.requests, "get", return_value=response):
+            self.assertEqual(
+                self.scraper.get_data("https://example.com", r"\d+", ""), ""
+            )
+        response.__exit__.assert_called_once()
+
+    def test_example_configuration(self):
+        self.assertEqual(self.interval, 3600)
+        self.assertEqual(len(self.objects), 2)
+        self.assertEqual(self.objects[0].measurement, "MetaData_HouseData")
+        self.assertEqual(self.objects[0].operation, "")
+
+    def test_default_interval_and_literal_percent(self):
+        text = (ROOT / ".config.example").read_text()
+        text = text.replace("interval = 3600", "").replace(
+            "example-db", "example%token"
+        )
+        config, _, interval = self.load_settings(text)
+        self.assertEqual(interval, 3600)
+        self.assertEqual(config["InfluxDB"]["token"], "example%token")
+
+    def test_invalid_configuration_is_rejected(self):
+        text = (ROOT / ".config.example").read_text()
+        cases = [
+            text.replace("interval = 3600", "interval = 0"),
+            text.replace("interval = 3600", "interval = -10"),
+            text.replace("interval = 3600", "interval = invalid"),
+            text.replace("token  = example-db", "token ="),
+            text.replace("measurement = MetaData_HouseData", "measurement ="),
+            text + "\noperation = unsupported\n",
+            text.replace(r'"numberOfItems":(\d+)', "("),
+            text.replace(r'"numberOfItems":(\d+)', r"(\d+)(\d+)"),
+            "[InfluxDB]\ntoken=t\norg=o\nserver=s\nbucket=b\n",
+        ]
+        for invalid in cases:
+            with self.subTest(config=invalid):
+                with self.assertRaises(ValueError):
+                    self.load_settings(invalid)
+
+    def test_multiple_config_files_are_merged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            override = Path(directory) / "override.ini"
+            override.write_text("[Scraper]\ninterval = 60\n", encoding="utf-8")
+            _, objects, interval = self.scraper.load_config(
+                [str(ROOT / ".config.example"), str(override)]
+            )
+        self.assertEqual(interval, 60)
+        self.assertEqual(len(objects), 2)
+
+    def test_missing_config_file_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "Cannot read config"):
+                self.scraper.load_config([str(Path(directory) / "missing.ini")])
+
+    def test_main_runs_synchronously(self):
+        with patch.object(self.scraper, "run_scraper") as run:
+            self.assertEqual(
+                self.scraper.main(["-c", str(ROOT / ".config.example")]), 0
+            )
+        self.assertEqual(run.call_args.args[2], 3600)
+
+    def test_cli_reports_configuration_errors(self):
+        with patch.object(self.scraper, "run_scraper") as run:
+            with self.assertRaises(SystemExit) as error:
+                self.scraper.main(["-c", "/missing/config.ini"])
+        self.assertEqual(error.exception.code, 2)
+        run.assert_not_called()
+
+    def test_influx_write_uses_configuration_and_integer_field(self):
+        with patch.object(self.scraper.influxdb_client, "InfluxDBClient") as factory:
+            client = factory.return_value.__enter__.return_value
+            self.scraper.write_data("42", "test_measurement", self.config)
+
+        factory.assert_called_once_with(url="ip", token="example-db", org="example-org")
+        client.write_api.assert_called_once_with(write_options=self.scraper.SYNCHRONOUS)
+        write = client.write_api.return_value.write
+        self.assertEqual(write.call_args.kwargs["bucket"], "example-bucket")
+        self.assertEqual(
+            write.call_args.kwargs["record"].to_line_protocol(),
+            "test_measurement value=42i",
+        )
+
+    def test_scheduler_skips_failed_fetch_and_keeps_processing(self):
+        with (
+            patch.object(self.scraper, "get_data", side_effect=["", "42"]),
+            patch.object(self.scraper, "write_data") as write,
+            patch.object(self.scraper.time, "time", side_effect=[100, 101]),
+            patch.object(
+                self.scraper.time, "sleep", side_effect=KeyboardInterrupt
+            ) as sleep,
+        ):
+            self.scraper.run_scraper(self.config, self.objects, self.interval)
+
+        write.assert_called_once_with("42", "MetaData_FlatData", self.config)
+        sleep.assert_called_once_with(3599)
+
+    def test_scheduler_continues_after_an_error(self):
+        with (
+            patch.object(
+                self.scraper, "get_data", side_effect=[ValueError("bad data"), "42"]
+            ),
+            patch.object(self.scraper, "write_data") as write,
+            patch.object(self.scraper.time, "time", side_effect=[100, 101]),
+            patch.object(self.scraper.time, "sleep", side_effect=KeyboardInterrupt),
+        ):
+            self.scraper.run_scraper(self.config, self.objects, self.interval)
+
+        write.assert_called_once_with("42", "MetaData_FlatData", self.config)
+
+    def test_main_exits_cleanly_on_keyboard_interrupt(self):
+        with (
+            patch.object(self.scraper, "get_data", return_value=""),
+            patch.object(self.scraper.time, "time", side_effect=[100, 101]),
+            patch.object(self.scraper.time, "sleep", side_effect=KeyboardInterrupt),
+        ):
+            self.assertEqual(
+                self.scraper.main(["-c", str(ROOT / ".config.example")]), 0
+            )
+
+    def test_scheduler_writes_zero(self):
+        with (
+            patch.object(self.scraper, "get_data", side_effect=["0", ""]),
+            patch.object(self.scraper, "write_data") as write,
+            patch.object(self.scraper.time, "time", side_effect=[100, 101]),
+            patch.object(self.scraper.time, "sleep", side_effect=KeyboardInterrupt),
+        ):
+            self.scraper.run_scraper(self.config, self.objects, self.interval)
+        write.assert_called_once_with("0", "MetaData_HouseData", self.config)
+
+    def test_cli_help(self):
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--conf", result.stdout)
