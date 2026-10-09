@@ -195,6 +195,37 @@ class ScraperTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Cannot read config"):
                 self.scraper.load_config([str(Path(directory) / "missing.ini")])
 
+    def test_main_stops_cleanly_on_sigterm(self):
+        previous_handler = self.scraper.signal.getsignal(self.scraper.signal.SIGTERM)
+        with (
+            patch.object(self.scraper, "get_data", return_value=""),
+            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101]),
+            patch.object(
+                self.scraper.time,
+                "sleep",
+                side_effect=lambda delay: self.scraper.handle_termination(
+                    self.scraper.signal.SIGTERM, None
+                ),
+            ),
+        ):
+            self.assertEqual(
+                self.scraper.main(["-c", str(ROOT / ".config.example")]), 0
+            )
+        self.assertEqual(
+            self.scraper.signal.getsignal(self.scraper.signal.SIGTERM), previous_handler
+        )
+
+    def test_main_restores_sigterm_handler_after_failure(self):
+        previous_handler = self.scraper.signal.getsignal(self.scraper.signal.SIGTERM)
+        with patch.object(
+            self.scraper, "run_scraper", side_effect=RuntimeError("failure")
+        ):
+            with self.assertRaises(RuntimeError):
+                self.scraper.main(["-c", str(ROOT / ".config.example")])
+        self.assertEqual(
+            self.scraper.signal.getsignal(self.scraper.signal.SIGTERM), previous_handler
+        )
+
     def test_main_runs_synchronously(self):
         with patch.object(self.scraper, "run_scraper") as run:
             self.assertEqual(

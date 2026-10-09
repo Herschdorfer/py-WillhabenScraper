@@ -2,6 +2,7 @@ import re
 import time
 import configparser
 import argparse
+import signal
 from collections import Counter
 from statistics import mean, median
 import influxdb_client
@@ -183,6 +184,10 @@ def run_scraper(config, objects, interval):
         pass
 
 
+def handle_termination(_signum, _frame):
+    raise KeyboardInterrupt
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Simple scraper for willHaben data.")
     parser.add_argument(
@@ -193,7 +198,11 @@ def main(argv=None):
         config, objects, interval = load_config(args.conf)
     except (OSError, ValueError, configparser.Error) as error:
         parser.error(str(error))
-    run_scraper(config, objects, interval)
+    previous_handler = signal.signal(signal.SIGTERM, handle_termination)
+    try:
+        run_scraper(config, objects, interval)
+    finally:
+        signal.signal(signal.SIGTERM, previous_handler)
     return 0
 
 
