@@ -284,6 +284,21 @@ class ScraperTests(unittest.TestCase):
             self.scraper.run_scraper(self.config, self.objects, self.interval)
         sleep.assert_called_once_with(899)
 
+    def test_scheduler_runs_immediately_at_due_boundaries(self):
+        for now, expected_wait in ((3700, 0), (7300, 0), (3701, 3599)):
+            with self.subTest(now=now):
+                with (
+                    patch.object(self.scraper, "get_data", return_value=""),
+                    patch.object(
+                        self.scraper.time, "monotonic", side_effect=[100, now]
+                    ),
+                    patch.object(
+                        self.scraper.time, "sleep", side_effect=KeyboardInterrupt
+                    ) as sleep,
+                ):
+                    self.scraper.run_scraper(self.config, self.objects, self.interval)
+                sleep.assert_called_once_with(expected_wait)
+
     def test_cli_help(self):
         result = subprocess.run(
             [sys.executable, str(SCRIPT), "--help"],

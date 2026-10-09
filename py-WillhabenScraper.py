@@ -3,6 +3,7 @@ import time
 import configparser
 import argparse
 from collections import Counter
+from math import ceil
 from statistics import mean, median
 import influxdb_client
 import requests
@@ -175,8 +176,8 @@ def run_scraper(config, objects, interval):
 
             next_reading += interval
             now = time.monotonic()
-            if now >= next_reading:
-                missed_intervals = int((now - next_reading) // interval) + 1
+            if now > next_reading:
+                missed_intervals = ceil((now - next_reading) / interval)
                 next_reading += missed_intervals * interval
             time.sleep(next_reading - now)
     except KeyboardInterrupt:
