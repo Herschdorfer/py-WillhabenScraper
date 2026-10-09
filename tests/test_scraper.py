@@ -146,6 +146,43 @@ class ScraperTests(unittest.TestCase):
                 self.scraper.get_data("https://example.com", r"\d+", ""), ""
             )
 
+    def test_http_retry_policy_is_bounded_and_get_only(self):
+        with self.scraper.create_http_session() as session:
+            retry = session.get_adapter("https://example.com").max_retries
+            self.assertEqual(retry.total, 2)
+            self.assertEqual(retry.read, 0)
+            self.assertEqual(retry.backoff_max, 4)
+            self.assertFalse(retry.respect_retry_after_header)
+            self.assertTrue(retry.is_retry("GET", 503))
+            self.assertFalse(retry.is_retry("POST", 503))
+            self.assertFalse(retry.is_retry("GET", 401))
+            self.assertIs(
+                session.get_adapter("http://example.com"),
+                session.get_adapter("https://example.com"),
+            )
+
+    def test_get_data_uses_supplied_http_session(self):
+        session = MagicMock()
+        session.get.return_value = self.response("42")
+        with patch.object(
+            self.scraper.requests, "get", side_effect=AssertionError("global transport")
+        ):
+            self.assertEqual(
+                self.scraper.get_data("https://example.com", r"\d+", "", session), "42"
+            )
+        self.assertEqual(session.get.call_args.kwargs["timeout"], 30)
+
+    def test_main_closes_shared_http_session(self):
+        with (
+            patch.object(self.scraper, "create_http_session") as factory,
+            patch.object(self.scraper, "run_scraper") as run,
+        ):
+            self.scraper.main(["-c", str(ROOT / ".config.example")])
+        self.assertIs(
+            run.call_args.args[3], factory.return_value.__enter__.return_value
+        )
+        factory.return_value.__exit__.assert_called_once()
+
     def test_timeout_returns_empty(self):
         with patch.object(
             self.scraper.requests, "get", side_effect=Timeout("timed out")
