@@ -199,9 +199,12 @@ def main(argv=None):
         config, objects, interval = load_config(args.conf)
     except (OSError, ValueError, configparser.Error) as error:
         parser.error(str(error))
-    previous_handler = signal.signal(signal.SIGTERM, handle_termination)
+    previous_handler = signal.getsignal(signal.SIGTERM)
     try:
+        signal.signal(signal.SIGTERM, handle_termination)
         run_scraper(config, objects, interval)
+    except KeyboardInterrupt:
+        pass
     finally:
         signal.signal(signal.SIGTERM, previous_handler)
     return 0

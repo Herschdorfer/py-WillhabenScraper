@@ -203,10 +203,29 @@ class ScraperTests(unittest.TestCase):
             patch.object(
                 self.scraper.time,
                 "sleep",
-                side_effect=lambda delay: self.scraper.handle_termination(
-                    self.scraper.signal.SIGTERM, None
-                ),
+                side_effect=lambda delay: self.scraper.signal.getsignal(
+                    self.scraper.signal.SIGTERM
+                )(self.scraper.signal.SIGTERM, None),
             ),
+        ):
+            self.assertEqual(
+                self.scraper.main(["-c", str(ROOT / ".config.example")]), 0
+            )
+        self.assertEqual(
+            self.scraper.signal.getsignal(self.scraper.signal.SIGTERM), previous_handler
+        )
+
+    def test_main_restores_handler_when_installation_is_interrupted(self):
+        previous_handler = self.scraper.signal.getsignal(self.scraper.signal.SIGTERM)
+        original_install = self.scraper.signal.signal
+
+        def interrupted_install(signum, handler):
+            original_install(signum, handler)
+            if handler is self.scraper.handle_termination:
+                raise KeyboardInterrupt
+
+        with patch.object(
+            self.scraper.signal, "signal", side_effect=interrupted_install
         ):
             self.assertEqual(
                 self.scraper.main(["-c", str(ROOT / ".config.example")]), 0
