@@ -45,10 +45,29 @@ class ScrapingObject:
         self.operation = operation
 
 
+def validate_http_url(url, label):
+    try:
+        parsed = urlsplit(url)
+        valid = (
+            parsed.scheme in ("http", "https")
+            and bool(parsed.hostname)
+            and parsed.username is None
+            and parsed.password is None
+            and (parsed.port is None or parsed.port > 0)
+            and not any(character.isspace() for character in url)
+            and re.search(r"%(?![0-9A-Fa-f]{2})", url) is None
+        )
+    except ValueError:
+        valid = False
+    if not valid:
+        raise ValueError(f"{label} must be an absolute HTTP(S) URL without credentials")
+
+
 def load_search(section, settings):
     for key in ("url", "regex", "measurement"):
         if not settings.get(key, "").strip():
             raise ValueError(f"Missing [{section}] {key}")
+    validate_http_url(settings["url"], f"[{section}] url")
     operation = settings.get("operation", "")
     if operation not in ("", "min", "max", "average", "median", "mode"):
         raise ValueError(f"Unsupported operation in [{section}]: {operation}")
@@ -75,6 +94,7 @@ def load_config(paths):
     for key in ("token", "org", "server", "bucket"):
         if not config["InfluxDB"].get(key, "").strip():
             raise ValueError(f"Missing [InfluxDB] {key}")
+    validate_http_url(config["InfluxDB"]["server"], "[InfluxDB] server")
 
     interval = config.getint("Scraper", "interval", fallback=3600)
     if interval <= 0:

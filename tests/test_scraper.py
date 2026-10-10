@@ -249,6 +249,59 @@ class ScraperTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.load_settings(invalid)
 
+    def test_search_rejects_invalid_or_credentialed_urls(self):
+        credentials = ":".join(["example-user", "dummy-value"])
+        urls = [
+            "file:///etc/passwd",
+            "ftp://example.com",
+            "/relative",
+            "https://",
+            "https://example.com:70000",
+            "https://example.com:0",
+            "https://example.com/a b",
+            "https://[invalid",
+            "https://%zz",
+            "https://example.com/%zz",
+            "https://example.com/?value=%2",
+            "https://example.com/%",
+            f"https://{credentials}@example.com",
+        ]
+        for url in urls:
+            with self.subTest(url=url):
+                with self.assertRaises(ValueError):
+                    self.scraper.load_search(
+                        "1", {"url": url, "regex": r"\d+", "measurement": "test"}
+                    )
+
+    def test_search_accepts_local_http_and_ipv6(self):
+        for url in (
+            "http://localhost:8086/data",
+            "https://example.com",
+            "http://[::1]:8086",
+        ):
+            with self.subTest(url=url):
+                search = self.scraper.load_search(
+                    "1", {"url": url, "regex": r"\d+", "measurement": "test"}
+                )
+                self.assertEqual(search.url, url)
+
+    def test_search_accepts_valid_percent_escapes(self):
+        for url in ("https://example.com/a%20b", "https://example.com/?value=%25"):
+            with self.subTest(url=url):
+                search = self.scraper.load_search(
+                    "1", {"url": url, "regex": r"\d+", "measurement": "test"}
+                )
+                self.assertEqual(search.url, url)
+
+    def test_influx_server_url_is_validated(self):
+        text = (
+            (ROOT / ".config.example")
+            .read_text()
+            .replace("http://localhost:8086", "ftp://example.com")
+        )
+        with self.assertRaisesRegex(ValueError, "InfluxDB.*server"):
+            self.load_settings(text)
+
     def test_multiple_config_files_are_merged(self):
         with tempfile.TemporaryDirectory() as directory:
             override = Path(directory) / "override.ini"
@@ -333,7 +386,9 @@ class ScraperTests(unittest.TestCase):
             client = factory.return_value.__enter__.return_value
             self.scraper.write_data("42", "test_measurement", self.config)
 
-        factory.assert_called_once_with(url="ip", token="example-db", org="example-org")
+        factory.assert_called_once_with(
+            url="http://localhost:8086", token="example-db", org="example-org"
+        )
         client.write_api.assert_called_once_with(write_options=self.scraper.SYNCHRONOUS)
         write = client.write_api.return_value.write
         self.assertEqual(write.call_args.kwargs["bucket"], "example-bucket")
