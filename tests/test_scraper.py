@@ -298,6 +298,20 @@ class ScraperTests(unittest.TestCase):
         self.scraper.HEALTH_FILE.unlink()
         self.assertEqual(self.scraper.main(["--healthcheck"]), 1)
 
+    def test_main_clears_previous_health_before_startup(self):
+        self.scraper.report_health()
+        with (
+            patch.object(self.scraper, "create_http_session"),
+            patch.object(self.scraper, "create_influx_client"),
+            patch.object(self.scraper, "run_scraper") as run,
+        ):
+            self.assertEqual(
+                self.scraper.main(["-c", str(ROOT / ".config.example")]), 0
+            )
+
+        self.assertFalse(self.scraper.HEALTH_FILE.exists())
+        run.assert_called_once()
+
     def test_default_interval_and_literal_percent(self):
         text = (ROOT / ".config.example").read_text()
         text = text.replace("interval = 3600", "").replace(

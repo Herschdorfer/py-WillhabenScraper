@@ -319,6 +319,12 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.healthcheck:
         return 0 if is_healthy() else 1
+    try:
+        HEALTH_FILE.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError as error:
+        parser.error(f"Cannot reset health status: {type(error).__name__}")
     if not args.conf:
         parser.error("the following arguments are required: -c/--conf")
     try:
