@@ -15,7 +15,7 @@ docker run -d --name web-metrics-scraper \
    --restart unless-stopped \
    --user "$(id -u):$(id -g)" \
    --mount type=bind,src="$(pwd)/config.ini",dst=/config/config.ini,readonly \
-   ghcr.io/herschdorfer/py-willhabenscraper:latest
+   ghcr.io/herschdorfer/web-metrics-scraper:latest
 
 docker logs -f web-metrics-scraper
 ```
@@ -33,7 +33,7 @@ server address with your InfluxDB service's reachable URL.
 ```yaml
 services:
    scraper:
-      image: ghcr.io/herschdorfer/py-willhabenscraper:latest
+      image: ghcr.io/herschdorfer/web-metrics-scraper:latest
       restart: unless-stopped
       volumes:
          - ./config.ini:/config/config.ini:ro
@@ -49,8 +49,8 @@ no additional database container is required.
 Publishing a GitHub release automatically builds the Docker image and pushes it to
 GitHub Container Registry. Draft releases do not trigger a build.
 
-Images are available as `ghcr.io/herschdorfer/py-willhabenscraper:<release-tag>`.
-The legacy repository and image addresses are retained for compatibility.
+Images are available as `ghcr.io/herschdorfer/web-metrics-scraper:<release-tag>`.
+Releases published after the repository rename use this image address.
 Use an explicit release tag instead of `latest` for reproducible deployments.
 The `latest` tag tracks the most recently published non-prerelease release.
 The workflow uses GitHub's built-in token; no registry secrets are required.
@@ -58,14 +58,14 @@ The workflow uses GitHub's built-in token; no registry secrets are required.
 ```sh
 docker run --rm \
 	-v /absolute/path/to/config.ini:/config/config.ini:ro \
-	ghcr.io/herschdorfer/py-willhabenscraper:latest
+   ghcr.io/herschdorfer/web-metrics-scraper:latest
 ```
 
 The mounted configuration must be readable by the container's `nobody` user.
 To allow unauthenticated pulls, set the package visibility to public in GitHub's
 package settings after the first successful release build.
 
-The [GHCR package page](https://github.com/Herschdorfer/py-WillhabenScraper/pkgs/container/py-willhabenscraper)
+The [GHCR package page](https://github.com/Herschdorfer/web-metrics-scraper/pkgs/container/web-metrics-scraper)
 renders this README from the repository's `master` branch. Images include a
 generic description and source/documentation metadata. README changes appear on
 the package page after merge; new image metadata requires a new release.
@@ -163,16 +163,16 @@ SIGTERM and Ctrl+C close pooled resources cleanly.
 
 The ten focused improvements, in review order:
 
-1. [Monotonic scheduling and missed intervals](https://github.com/Herschdorfer/py-WillhabenScraper/pull/17).
-2. [Graceful SIGTERM shutdown](https://github.com/Herschdorfer/py-WillhabenScraper/pull/18).
-3. [Structured logs without URL secrets](https://github.com/Herschdorfer/py-WillhabenScraper/pull/19).
-4. [HTTP session reuse and bounded retries](https://github.com/Herschdorfer/py-WillhabenScraper/pull/20).
-5. [InfluxDB connection and writer reuse](https://github.com/Herschdorfer/py-WillhabenScraper/pull/21).
-6. [Early URL validation](https://github.com/Herschdorfer/py-WillhabenScraper/pull/22).
-7. [Bounded response sizes](https://github.com/Herschdorfer/py-WillhabenScraper/pull/23).
-8. [Unused dependency removal](https://github.com/Herschdorfer/py-WillhabenScraper/pull/24).
-9. [Dependency audit in CI](https://github.com/Herschdorfer/py-WillhabenScraper/pull/25).
-10. [Updated and pinned Actions](https://github.com/Herschdorfer/py-WillhabenScraper/pull/26).
+1. [Monotonic scheduling and missed intervals](https://github.com/Herschdorfer/web-metrics-scraper/pull/17).
+2. [Graceful SIGTERM shutdown](https://github.com/Herschdorfer/web-metrics-scraper/pull/18).
+3. [Structured logs without URL secrets](https://github.com/Herschdorfer/web-metrics-scraper/pull/19).
+4. [HTTP session reuse and bounded retries](https://github.com/Herschdorfer/web-metrics-scraper/pull/20).
+5. [InfluxDB connection and writer reuse](https://github.com/Herschdorfer/web-metrics-scraper/pull/21).
+6. [Early URL validation](https://github.com/Herschdorfer/web-metrics-scraper/pull/22).
+7. [Bounded response sizes](https://github.com/Herschdorfer/web-metrics-scraper/pull/23).
+8. [Unused dependency removal](https://github.com/Herschdorfer/web-metrics-scraper/pull/24).
+9. [Dependency audit in CI](https://github.com/Herschdorfer/web-metrics-scraper/pull/25).
+10. [Updated and pinned Actions](https://github.com/Herschdorfer/web-metrics-scraper/pull/26).
 
 These PRs form an ordered stack. After merging a prerequisite, retarget its
 successor to `master` before merging the successor. Do not merge a successor

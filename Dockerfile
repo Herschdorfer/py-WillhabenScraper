@@ -2,8 +2,8 @@ FROM python:3.13-slim
 
 LABEL org.opencontainers.image.title="web-metrics-scraper" \
 	org.opencontainers.image.description="Configurable HTTP metrics scraper with InfluxDB output" \
-	org.opencontainers.image.source="https://github.com/Herschdorfer/py-WillhabenScraper" \
-	org.opencontainers.image.documentation="https://github.com/Herschdorfer/py-WillhabenScraper/blob/master/README.md"
+	org.opencontainers.image.source="https://github.com/Herschdorfer/web-metrics-scraper" \
+	org.opencontainers.image.documentation="https://github.com/Herschdorfer/web-metrics-scraper/blob/master/README.md"
 
 WORKDIR /app
 COPY requirements.txt .
