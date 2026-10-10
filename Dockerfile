@@ -12,5 +12,6 @@ COPY web_metrics_scraper.py .
 
 # The config (InfluxDB token, searches) is mounted, never baked into the image.
 USER nobody
+HEALTHCHECK --interval=60s --timeout=5s --start-period=30s --retries=3 CMD ["python3", "web_metrics_scraper.py", "--healthcheck"]
 ENTRYPOINT ["python3", "-u", "web_metrics_scraper.py"]
 CMD ["-c", "/config/config.ini"]
