@@ -397,7 +397,7 @@ class ScraperTests(unittest.TestCase):
         previous_handler = self.scraper.signal.getsignal(self.scraper.signal.SIGTERM)
         with (
             patch.object(self.scraper, "get_data", return_value=""),
-            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101]),
+            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101, 101]),
             patch.object(
                 self.scraper.time,
                 "sleep",
@@ -501,7 +501,7 @@ class ScraperTests(unittest.TestCase):
         with (
             patch.object(self.scraper, "get_data", side_effect=["42", "43"]),
             patch.object(self.scraper, "write_data") as write,
-            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101]),
+            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101, 101]),
             patch.object(self.scraper.time, "sleep", side_effect=KeyboardInterrupt),
         ):
             self.scraper.run_scraper(
@@ -514,7 +514,9 @@ class ScraperTests(unittest.TestCase):
         with (
             patch.object(self.scraper, "get_data", return_value=""),
             patch.object(self.scraper, "report_health") as report_health,
-            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101]),
+            patch.object(
+                self.scraper.time, "monotonic", side_effect=[100, 101, 101, 131]
+            ),
             patch.object(
                 self.scraper.time, "sleep", side_effect=[None, KeyboardInterrupt]
             ) as sleep,
@@ -524,11 +526,28 @@ class ScraperTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in sleep.call_args_list], [30, 30])
         self.assertEqual(report_health.call_count, 4)
 
+    def test_scheduler_starts_next_cycle_after_sleep_overshoots(self):
+        with (
+            patch.object(self.scraper, "get_data", return_value="") as get_data,
+            patch.object(
+                self.scraper.time,
+                "monotonic",
+                side_effect=[100, 101, 101, 3701, 3701, 3701],
+            ),
+            patch.object(
+                self.scraper.time, "sleep", side_effect=[None, KeyboardInterrupt]
+            ) as sleep,
+        ):
+            self.scraper.run_scraper(self.config, self.objects, self.interval)
+
+        self.assertEqual(get_data.call_count, 4)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [30, 30])
+
     def test_scheduler_skips_failed_fetch_and_keeps_processing(self):
         with (
             patch.object(self.scraper, "get_data", side_effect=["", "42"]),
             patch.object(self.scraper, "write_data") as write,
-            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101]),
+            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101, 101]),
             patch.object(
                 self.scraper.time, "sleep", side_effect=KeyboardInterrupt
             ) as sleep,
@@ -544,7 +563,7 @@ class ScraperTests(unittest.TestCase):
                 self.scraper, "get_data", side_effect=[ValueError("bad data"), "42"]
             ),
             patch.object(self.scraper, "write_data") as write,
-            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101]),
+            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101, 101]),
             patch.object(self.scraper.time, "sleep", side_effect=KeyboardInterrupt),
         ):
             self.scraper.run_scraper(self.config, self.objects, self.interval)
@@ -554,7 +573,7 @@ class ScraperTests(unittest.TestCase):
     def test_main_exits_cleanly_on_keyboard_interrupt(self):
         with (
             patch.object(self.scraper, "get_data", return_value=""),
-            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101]),
+            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101, 101]),
             patch.object(self.scraper.time, "sleep", side_effect=KeyboardInterrupt),
         ):
             self.assertEqual(
@@ -565,7 +584,7 @@ class ScraperTests(unittest.TestCase):
         with (
             patch.object(self.scraper, "get_data", side_effect=["0", ""]),
             patch.object(self.scraper, "write_data") as write,
-            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101]),
+            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101, 101]),
             patch.object(self.scraper.time, "sleep", side_effect=KeyboardInterrupt),
         ):
             self.scraper.run_scraper(self.config, self.objects, self.interval)
@@ -574,7 +593,9 @@ class ScraperTests(unittest.TestCase):
     def test_scheduler_skips_missed_intervals_without_using_wall_clock(self):
         with (
             patch.object(self.scraper, "get_data", return_value=""),
-            patch.object(self.scraper.time, "monotonic", side_effect=[100, 10001]),
+            patch.object(
+                self.scraper.time, "monotonic", side_effect=[100, 10001, 10001]
+            ),
             patch.object(
                 self.scraper.time, "time", side_effect=AssertionError("wall clock")
             ),
@@ -587,22 +608,29 @@ class ScraperTests(unittest.TestCase):
 
     def test_scheduler_runs_immediately_at_due_boundaries(self):
         for now, expected_wait in (
-            (3700, 0),
-            (7300, 0),
+            (3700, None),
+            (7300, None),
             (3701, self.scraper.HEALTH_UPDATE_INTERVAL),
         ):
             with self.subTest(now=now):
                 with (
-                    patch.object(self.scraper, "get_data", return_value=""),
                     patch.object(
-                        self.scraper.time, "monotonic", side_effect=[100, now]
+                        self.scraper,
+                        "get_data",
+                        side_effect=["", "", KeyboardInterrupt],
+                    ),
+                    patch.object(
+                        self.scraper.time, "monotonic", side_effect=[100, now, now]
                     ),
                     patch.object(
                         self.scraper.time, "sleep", side_effect=KeyboardInterrupt
                     ) as sleep,
                 ):
                     self.scraper.run_scraper(self.config, self.objects, self.interval)
-                sleep.assert_called_once_with(expected_wait)
+                if expected_wait is None:
+                    sleep.assert_not_called()
+                else:
+                    sleep.assert_called_once_with(expected_wait)
 
     def test_cli_help(self):
         result = subprocess.run(

@@ -71,8 +71,6 @@ python -m pip install -r requirements.txt
 python web_metrics_scraper.py -c config.ini
 ```
 
-Edit the installation and configuration paths in [web-metrics-scraper.service](web-metrics-scraper.service) before installing it.
-
 # Development
 
 ```sh

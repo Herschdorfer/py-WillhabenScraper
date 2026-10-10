@@ -4,6 +4,7 @@ import configparser
 import argparse
 import signal
 import logging
+import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 from collections import Counter
@@ -19,7 +20,7 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 
 HTTP_TIMEOUT = 30
 MAX_RESPONSE_BYTES = 10 * 1024 * 1024
-HEALTH_FILE = Path("/tmp/web-metrics-scraper-health")
+HEALTH_FILE = Path(tempfile.gettempdir()) / "web-metrics-scraper-health"
 HEALTH_UPDATE_INTERVAL = 30
 HEALTH_TIMEOUT = 180
 LOGGER = logging.getLogger(__name__)
@@ -291,14 +292,12 @@ def run_scraper(config, objects, interval, http_client=None, write_api=None):
             if now > next_reading:
                 missed_intervals = ceil((now - next_reading) / interval)
                 next_reading += missed_intervals * interval
-            remaining = next_reading - now
             while True:
                 report_health()
-                delay = min(max(0, remaining), HEALTH_UPDATE_INTERVAL)
-                time.sleep(delay)
-                remaining -= delay
+                remaining = next_reading - time.monotonic()
                 if remaining <= 0:
                     break
+                time.sleep(min(remaining, HEALTH_UPDATE_INTERVAL))
     except KeyboardInterrupt:
         pass
 
