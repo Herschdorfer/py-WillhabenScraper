@@ -112,12 +112,17 @@ bucket = example-bucket
 
 [Scraper]
 interval = 3600
+user_agent = Mozilla/5.0
 
 [1]
 url = https://example.org/metrics
 regex = "count":\s*(\d+)
 measurement = website_count
 operation = min
+# Optional per-search overrides:
+# user_agent = CustomScraper/1.0
+# min_value = 0
+# max_value = 1000000
 ```
 
 Each numbered section defines a source.
@@ -136,9 +141,16 @@ The bucket belongs in `[InfluxDB]`, not in a numbered search section.
 | `mode` | Upper edge of the most common 50-unit bucket. The first bucket wins ties. |
 
 The interval is a positive number of seconds, defaulting to 3600.
+The global `user_agent` is optional and defaults to the scraper's existing browser-style value.
+A numbered section can override it with its own `user_agent`.
+Responses with the same URL and User-Agent are fetched once per scraping cycle and reused by matching searches.
+Optional `min_value` and `max_value` bounds are inclusive integers applied to the aggregated result.
+Values outside the configured bounds are skipped with a warning.
 Multiple `-c` arguments merge configuration files in order.
 Later files override earlier ones.
 URLs must be absolute HTTP(S) addresses without inline credentials and with valid percent escapes.
+Configuration values are not interpolated, so write URL percent escapes once, such as `%20`, not doubled as `%%20`.
+Encode a literal percent sign in a URL as `%25`.
 Use HTTPS when available.
 HTTP is supported for local services.
 Keep InfluxDB tokens in private configuration files.

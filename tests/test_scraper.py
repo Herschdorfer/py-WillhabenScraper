@@ -109,6 +109,49 @@ class ScraperTests(unittest.TestCase):
         self.assertEqual(fetch.call_args.kwargs["timeout"], 30)
         response.__exit__.assert_called_once()
 
+    def test_request_uses_configured_user_agent(self):
+        response = self.response('"numberOfItems":42')
+        with patch.object(self.scraper.requests, "get", return_value=response) as fetch:
+            self.assertEqual(
+                self.scraper.get_data(
+                    "https://example.com",
+                    r'"numberOfItems":(\d+)',
+                    "",
+                    user_agent="CustomScraper/1.0",
+                ),
+                "42",
+            )
+        self.assertEqual(
+            fetch.call_args.kwargs["headers"]["User-Agent"], "CustomScraper/1.0"
+        )
+
+    def test_response_cache_shares_one_fetch_between_searches(self):
+        session = MagicMock()
+        session.get.return_value = self.response("10 20")
+        response_cache = {}
+
+        self.assertEqual(
+            self.scraper.get_data(
+                "https://example.com",
+                r"\d+",
+                "min",
+                session,
+                response_cache=response_cache,
+            ),
+            "10",
+        )
+        self.assertEqual(
+            self.scraper.get_data(
+                "https://example.com",
+                r"\d+",
+                "max",
+                session,
+                response_cache=response_cache,
+            ),
+            "20",
+        )
+        session.get.assert_called_once()
+
     def test_logs_hide_url_credentials_and_query_secrets(self):
         credentials = ":".join(["example-user", "private-password"])
         url = f"https://{credentials}@example.com/data?token=private-value"
@@ -269,6 +312,50 @@ class ScraperTests(unittest.TestCase):
         self.assertEqual(len(self.objects), 2)
         self.assertEqual(self.objects[0].measurement, "MetaData_HouseData")
         self.assertEqual(self.objects[0].operation, "")
+        self.assertEqual(self.objects[0].user_agent, self.scraper.DEFAULT_USER_AGENT)
+        self.assertIsNone(self.objects[0].min_value)
+        self.assertIsNone(self.objects[0].max_value)
+
+    def test_user_agent_and_bounds_configuration_precedence(self):
+        text = (ROOT / ".config.example").read_text()
+        text = text.replace("[Scraper]", "[Scraper]\nuser_agent = GlobalAgent/1.0")
+        text = text.replace(
+            "[1]", "[1]\nuser_agent = SearchAgent/1.0\nmin_value = 5\nmax_value = 10"
+        )
+        _, objects, _ = self.load_settings(text)
+        self.assertEqual(objects[0].user_agent, "SearchAgent/1.0")
+        self.assertEqual(objects[1].user_agent, "GlobalAgent/1.0")
+        self.assertEqual(objects[0].min_value, 5)
+        self.assertEqual(objects[0].max_value, 10)
+
+    def test_invalid_bounds_configuration_is_rejected(self):
+        text = (ROOT / ".config.example").read_text()
+        cases = [
+            text.replace("[1]", "[1]\nmin_value = many"),
+            text.replace("[1]", "[1]\nmin_value = 20\nmax_value = 10"),
+        ]
+        for invalid in cases:
+            with self.subTest(config=invalid):
+                with self.assertRaises(ValueError):
+                    self.load_settings(invalid)
+
+    def test_url_validation_errors_identify_the_invalid_part(self):
+        credentials = ":".join(("test-user", "test-pass"))
+        cases = [
+            ("ftp://example.com", "must use HTTP or HTTPS"),
+            (f"https://{credentials}@example.com", "must not include credentials"),
+            ("https://example.com:70000", "has an invalid port"),
+            ("https://example.com/a b", "must not contain whitespace"),
+            ("https://example.com/%zz", "invalid percent-encoding"),
+            ("https://example.com/Zen%%205", "invalid percent-encoding"),
+        ]
+        for url, message in cases:
+            with self.subTest(url=url):
+                with self.assertRaises(ValueError) as error:
+                    self.scraper.load_search(
+                        "1", {"url": url, "regex": r"\d+", "measurement": "test"}
+                    )
+                self.assertIn(message, str(error.exception))
 
     def test_default_interval_and_literal_percent(self):
         text = (ROOT / ".config.example").read_text()
@@ -481,6 +568,97 @@ class ScraperTests(unittest.TestCase):
             )
         self.assertEqual(write.call_count, 2)
         self.assertTrue(all(call.args[3] is writer for call in write.call_args_list))
+
+    def test_scheduler_fetches_shared_url_once_per_cycle(self):
+        shared_url = "https://example.com/shared"
+        objects = [
+            self.scraper.load_search(
+                "1",
+                {
+                    "url": shared_url,
+                    "regex": r"\d+",
+                    "measurement": "minimum",
+                    "operation": "min",
+                },
+            ),
+            self.scraper.load_search(
+                "2",
+                {
+                    "url": shared_url,
+                    "regex": r"\d+",
+                    "measurement": "maximum",
+                    "operation": "max",
+                },
+            ),
+        ]
+        session = MagicMock()
+        session.get.return_value = self.response("10 20")
+        real_get_data = self.scraper.get_data
+        response_caches = []
+
+        def capture_response_cache(*args, **kwargs):
+            response_caches.append(kwargs["response_cache"])
+            return real_get_data(*args, **kwargs)
+
+        with (
+            patch.object(self.scraper, "get_data", side_effect=capture_response_cache),
+            patch.object(self.scraper, "write_data") as write,
+            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101]),
+            patch.object(self.scraper.time, "sleep", side_effect=KeyboardInterrupt),
+        ):
+            self.scraper.run_scraper(
+                self.config, objects, self.interval, http_client=session
+            )
+
+        session.get.assert_called_once()
+        self.assertIs(response_caches[0], response_caches[1])
+        self.assertEqual(response_caches[0], {})
+        self.assertEqual([call.args[0] for call in write.call_args_list], ["10", "20"])
+
+    def test_scheduler_does_not_cache_single_use_urls(self):
+        with (
+            patch.object(self.scraper, "get_data", return_value="42") as get_data,
+            patch.object(self.scraper, "write_data"),
+            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101]),
+            patch.object(self.scraper.time, "sleep", side_effect=KeyboardInterrupt),
+        ):
+            self.scraper.run_scraper(self.config, self.objects, self.interval)
+
+        self.assertTrue(
+            all(
+                call.kwargs["response_cache"] is None
+                for call in get_data.call_args_list
+            )
+        )
+
+    def test_scheduler_skips_values_outside_configured_bounds(self):
+        values = ("20", "60", "61", "19")
+        scraping_objects = [
+            self.scraper.load_search(
+                str(index),
+                {
+                    "url": f"https://example.com/{index}",
+                    "regex": r"\d+",
+                    "measurement": f"bounded_metric_{index}",
+                    "min_value": "20",
+                    "max_value": "60",
+                },
+            )
+            for index in range(1, len(values) + 1)
+        ]
+        with (
+            patch.object(self.scraper, "get_data", side_effect=values),
+            patch.object(self.scraper, "write_data") as write,
+            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101]),
+            patch.object(self.scraper.time, "sleep", side_effect=KeyboardInterrupt),
+            self.assertLogs(self.scraper.LOGGER, level="WARNING") as logs,
+        ):
+            self.scraper.run_scraper(self.config, scraping_objects, self.interval)
+
+        self.assertEqual([call.args[0] for call in write.call_args_list], ["20", "60"])
+        self.assertEqual(
+            sum("outside configured bounds" in entry for entry in logs.output), 2
+        )
 
     def test_scheduler_skips_failed_fetch_and_keeps_processing(self):
         with (

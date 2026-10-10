@@ -18,6 +18,10 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 
 HTTP_TIMEOUT = 30
 MAX_RESPONSE_BYTES = 10 * 1024 * 1024
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/137.0.0.0 Safari/537.36"
+)
 LOGGER = logging.getLogger(__name__)
 
 
@@ -39,32 +43,68 @@ class ScrapingObject:
         operation (str): The operation to perform on the extracted data (e.g., average, min).
     """
 
-    def __init__(self, url, regex, measurement, operation):
+    def __init__(
+        self,
+        url,
+        regex,
+        measurement,
+        operation,
+        user_agent=DEFAULT_USER_AGENT,
+        min_value=None,
+        max_value=None,
+    ):
         self.url = url
         self.regex = regex
         self.measurement = measurement
         self.operation = operation
+        self.user_agent = user_agent
+        self.min_value = min_value
+        self.max_value = max_value
 
 
 def validate_http_url(url, label):
     try:
         parsed = urlsplit(url)
-        valid = (
-            parsed.scheme in ("http", "https")
-            and bool(parsed.hostname)
-            and parsed.username is None
-            and parsed.password is None
-            and (parsed.port is None or parsed.port > 0)
-            and not any(character.isspace() for character in url)
-            and re.search(r"%(?![0-9A-Fa-f]{2})", url) is None
-        )
-    except ValueError:
-        valid = False
-    if not valid:
-        raise ValueError(f"{label} must be an absolute HTTP(S) URL without credentials")
+    except ValueError as error:
+        raise ValueError(f"{label} is malformed: {error}") from error
+    try:
+        port = parsed.port
+    except ValueError as error:
+        raise ValueError(f"{label} has an invalid port: {error}") from error
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"{label} must use HTTP or HTTPS")
+    if not parsed.hostname:
+        raise ValueError(f"{label} must include a hostname")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError(f"{label} must not include credentials")
+    if port == 0:
+        raise ValueError(f"{label} has an invalid port")
+    if any(character.isspace() for character in url):
+        raise ValueError(f"{label} must not contain whitespace")
+    if re.search(r"%(?![0-9A-Fa-f]{2})", url):
+        raise ValueError(f"{label} contains invalid percent-encoding")
 
 
-def load_search(section, settings):
+def validate_user_agent(user_agent, label):
+    user_agent = user_agent.strip()
+    if not user_agent:
+        raise ValueError(f"{label} must not be empty")
+    if "\r" in user_agent or "\n" in user_agent:
+        raise ValueError(f"{label} must not contain line breaks")
+    return user_agent
+
+
+def load_optional_integer(settings, section, key):
+    value = settings.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except ValueError as error:
+        raise ValueError(f"[{section}] {key} must be an integer") from error
+
+
+def load_search(section, settings, default_user_agent=DEFAULT_USER_AGENT):
     for key in ("url", "regex", "measurement"):
         if not settings.get(key, "").strip():
             raise ValueError(f"Missing [{section}] {key}")
@@ -78,8 +118,21 @@ def load_search(section, settings):
         raise ValueError(f"Invalid regex in [{section}]: {error}") from error
     if pattern.groups > 1:
         raise ValueError(f"Regex in [{section}] must have at most one capture group")
+    user_agent = validate_user_agent(
+        settings.get("user_agent", default_user_agent), f"[{section}] user_agent"
+    )
+    min_value = load_optional_integer(settings, section, "min_value")
+    max_value = load_optional_integer(settings, section, "max_value")
+    if min_value is not None and max_value is not None and min_value > max_value:
+        raise ValueError(f"[{section}] min_value must not exceed max_value")
     return ScrapingObject(
-        settings["url"], settings["regex"], settings["measurement"], operation
+        settings["url"],
+        settings["regex"],
+        settings["measurement"],
+        operation,
+        user_agent,
+        min_value,
+        max_value,
     )
 
 
@@ -100,9 +153,13 @@ def load_config(paths):
     interval = config.getint("Scraper", "interval", fallback=3600)
     if interval <= 0:
         raise ValueError("[Scraper] interval must be positive")
+    default_user_agent = validate_user_agent(
+        config.get("Scraper", "user_agent", fallback=DEFAULT_USER_AGENT),
+        "[Scraper] user_agent",
+    )
 
     objects = [
-        load_search(section, config[section])
+        load_search(section, config[section], default_user_agent)
         for section in config.sections()
         if section.isdigit()
     ]
@@ -143,7 +200,14 @@ def read_response(response):
     return content.decode("utf-8")
 
 
-def get_data(url, regex, operation, http_client=None):
+def get_data(
+    url,
+    regex,
+    operation,
+    http_client=None,
+    user_agent=DEFAULT_USER_AGENT,
+    response_cache=None,
+):
     """
     Retrieves data from a given URL using a regular expression.
 
@@ -153,31 +217,42 @@ def get_data(url, regex, operation, http_client=None):
         operation (str): The aggregation operation to perform on integer matches.
         http_client: Optional requests-compatible object with a get method.
             Defaults to the requests module when omitted.
+        user_agent: User-Agent header value for the request.
+        response_cache: Optional per-cycle cache of response bodies by URL and
+            User-Agent.
 
     Returns:
         str: The integer aggregate, or an empty string when there is no usable data.
     """
-    transport = http_client if http_client is not None else requests
-    try:
-        with transport.get(
-            url,
-            headers={
-                "Accept-Encoding": "identity",
-                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
-            },
-            timeout=HTTP_TIMEOUT,
-            stream=True,
-        ) as response:
-            if response.status_code != 200:
-                LOGGER.warning(
-                    "HTTP %s from %s", response.status_code, source_host(url)
-                )
-                return ""
-            content = read_response(response)
-    except (requests.RequestException, UnicodeError) as error:
-        LOGGER.warning(
-            "Fetch failed for %s (%s)", source_host(url), type(error).__name__
-        )
+    cache_key = (url, user_agent)
+    if response_cache is not None and cache_key in response_cache:
+        content = response_cache[cache_key]
+    else:
+        transport = http_client if http_client is not None else requests
+        content = None
+        try:
+            with transport.get(
+                url,
+                headers={
+                    "Accept-Encoding": "identity",
+                    "User-Agent": user_agent,
+                },
+                timeout=HTTP_TIMEOUT,
+                stream=True,
+            ) as response:
+                if response.status_code != 200:
+                    LOGGER.warning(
+                        "HTTP %s from %s", response.status_code, source_host(url)
+                    )
+                else:
+                    content = read_response(response)
+        except (requests.RequestException, UnicodeError) as error:
+            LOGGER.warning(
+                "Fetch failed for %s (%s)", source_host(url), type(error).__name__
+            )
+        if response_cache is not None:
+            response_cache[cache_key] = content
+    if content is None:
         return ""
 
     matches = re.findall(regex, content)
@@ -241,30 +316,60 @@ def write_data(data, measurement, config, write_api=None):
 
 def run_scraper(config, objects, interval, http_client=None, write_api=None):
     next_reading = time.monotonic()
+    request_counts = Counter((obj.url, obj.user_agent) for obj in objects)
     try:
         while True:
+            response_cache = {}
+            remaining_requests = request_counts.copy()
             for scraping_object in objects:
+                request_key = (scraping_object.url, scraping_object.user_agent)
                 try:
                     data = get_data(
                         scraping_object.url,
                         scraping_object.regex,
                         scraping_object.operation,
                         http_client=http_client,
+                        user_agent=scraping_object.user_agent,
+                        response_cache=(
+                            response_cache if request_counts[request_key] > 1 else None
+                        ),
                     )
 
                     if data:
-                        write_data(data, scraping_object.measurement, config, write_api)
-                        LOGGER.info(
-                            "Wrote measurement %r: %s",
-                            scraping_object.measurement,
-                            data,
+                        value = int(data)
+                        below_minimum = (
+                            scraping_object.min_value is not None
+                            and value < scraping_object.min_value
                         )
+                        above_maximum = (
+                            scraping_object.max_value is not None
+                            and value > scraping_object.max_value
+                        )
+                        if below_minimum or above_maximum:
+                            LOGGER.warning(
+                                "Value %s for measurement %r is outside configured bounds",
+                                value,
+                                scraping_object.measurement,
+                            )
+                        else:
+                            write_data(
+                                data, scraping_object.measurement, config, write_api
+                            )
+                            LOGGER.info(
+                                "Wrote measurement %r: %s",
+                                scraping_object.measurement,
+                                data,
+                            )
                 except Exception as err:
                     LOGGER.warning(
                         "Search %r failed (%s)",
                         scraping_object.measurement,
                         type(err).__name__,
                     )
+                finally:
+                    remaining_requests[request_key] -= 1
+                    if remaining_requests[request_key] == 0:
+                        response_cache.pop(request_key, None)
 
             next_reading += interval
             now = time.monotonic()
