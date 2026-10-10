@@ -342,6 +342,43 @@ class ScraperTests(unittest.TestCase):
             "test_measurement value=42i",
         )
 
+    def test_shared_influx_writer_avoids_new_client(self):
+        writer = MagicMock()
+        with patch.object(self.scraper.influxdb_client, "InfluxDBClient") as factory:
+            self.scraper.write_data("42", "shared_measurement", self.config, writer)
+        factory.assert_not_called()
+        self.assertEqual(
+            writer.write.call_args.kwargs["record"].to_line_protocol(),
+            "shared_measurement value=42i",
+        )
+
+    def test_main_reuses_and_closes_influx_resources(self):
+        with (
+            patch.object(self.scraper, "create_influx_client") as factory,
+            patch.object(self.scraper, "run_scraper") as run,
+        ):
+            self.scraper.main(["-c", str(ROOT / ".config.example")])
+        client = factory.return_value.__enter__.return_value
+        writer_context = client.write_api.return_value
+        self.assertIs(run.call_args.args[4], writer_context.__enter__.return_value)
+        factory.assert_called_once()
+        writer_context.__exit__.assert_called_once()
+        factory.return_value.__exit__.assert_called_once()
+
+    def test_scheduler_passes_shared_writer_to_each_measurement(self):
+        writer = MagicMock()
+        with (
+            patch.object(self.scraper, "get_data", side_effect=["42", "43"]),
+            patch.object(self.scraper, "write_data") as write,
+            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101]),
+            patch.object(self.scraper.time, "sleep", side_effect=KeyboardInterrupt),
+        ):
+            self.scraper.run_scraper(
+                self.config, self.objects, self.interval, write_api=writer
+            )
+        self.assertEqual(write.call_count, 2)
+        self.assertTrue(all(call.args[3] is writer for call in write.call_args_list))
+
     def test_scheduler_skips_failed_fetch_and_keeps_processing(self):
         with (
             patch.object(self.scraper, "get_data", side_effect=["", "42"]),
@@ -353,7 +390,7 @@ class ScraperTests(unittest.TestCase):
         ):
             self.scraper.run_scraper(self.config, self.objects, self.interval)
 
-        write.assert_called_once_with("42", "MetaData_FlatData", self.config)
+        write.assert_called_once_with("42", "MetaData_FlatData", self.config, None)
         sleep.assert_called_once_with(3599)
 
     def test_scheduler_continues_after_an_error(self):
@@ -367,7 +404,7 @@ class ScraperTests(unittest.TestCase):
         ):
             self.scraper.run_scraper(self.config, self.objects, self.interval)
 
-        write.assert_called_once_with("42", "MetaData_FlatData", self.config)
+        write.assert_called_once_with("42", "MetaData_FlatData", self.config, None)
 
     def test_main_exits_cleanly_on_keyboard_interrupt(self):
         with (
@@ -387,7 +424,7 @@ class ScraperTests(unittest.TestCase):
             patch.object(self.scraper.time, "sleep", side_effect=KeyboardInterrupt),
         ):
             self.scraper.run_scraper(self.config, self.objects, self.interval)
-        write.assert_called_once_with("0", "MetaData_HouseData", self.config)
+        write.assert_called_once_with("0", "MetaData_HouseData", self.config, None)
 
     def test_scheduler_skips_missed_intervals_without_using_wall_clock(self):
         with (
