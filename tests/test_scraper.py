@@ -23,6 +23,11 @@ class ScraperTests(unittest.TestCase):
             [str(ROOT / ".config.example")]
         )
 
+    def setUp(self):
+        self.health_directory = tempfile.TemporaryDirectory()
+        self.scraper.HEALTH_FILE = Path(self.health_directory.name) / "health"
+        self.addCleanup(self.health_directory.cleanup)
+
     def load_settings(self, text):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.ini"
@@ -270,6 +275,29 @@ class ScraperTests(unittest.TestCase):
         self.assertEqual(self.objects[0].measurement, "MetaData_HouseData")
         self.assertEqual(self.objects[0].operation, "")
 
+    def test_healthcheck_reports_fresh_and_stale_heartbeat(self):
+        self.assertFalse(self.scraper.is_healthy())
+        self.scraper.report_health()
+        heartbeat_time = self.scraper.HEALTH_FILE.stat().st_mtime
+        with patch.object(
+            self.scraper.time,
+            "time",
+            return_value=heartbeat_time + self.scraper.HEALTH_TIMEOUT,
+        ):
+            self.assertTrue(self.scraper.is_healthy())
+        with patch.object(
+            self.scraper.time,
+            "time",
+            return_value=heartbeat_time + self.scraper.HEALTH_TIMEOUT + 1,
+        ):
+            self.assertFalse(self.scraper.is_healthy())
+
+    def test_healthcheck_cli_does_not_require_service_configuration(self):
+        self.scraper.report_health()
+        self.assertEqual(self.scraper.main(["--healthcheck"]), 0)
+        self.scraper.HEALTH_FILE.unlink()
+        self.assertEqual(self.scraper.main(["--healthcheck"]), 1)
+
     def test_default_interval_and_literal_percent(self):
         text = (ROOT / ".config.example").read_text()
         text = text.replace("interval = 3600", "").replace(
@@ -482,6 +510,20 @@ class ScraperTests(unittest.TestCase):
         self.assertEqual(write.call_count, 2)
         self.assertTrue(all(call.args[3] is writer for call in write.call_args_list))
 
+    def test_scheduler_refreshes_health_during_wait(self):
+        with (
+            patch.object(self.scraper, "get_data", return_value=""),
+            patch.object(self.scraper, "report_health") as report_health,
+            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101]),
+            patch.object(
+                self.scraper.time, "sleep", side_effect=[None, KeyboardInterrupt]
+            ) as sleep,
+        ):
+            self.scraper.run_scraper(self.config, self.objects, self.interval)
+
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [30, 30])
+        self.assertEqual(report_health.call_count, 4)
+
     def test_scheduler_skips_failed_fetch_and_keeps_processing(self):
         with (
             patch.object(self.scraper, "get_data", side_effect=["", "42"]),
@@ -494,7 +536,7 @@ class ScraperTests(unittest.TestCase):
             self.scraper.run_scraper(self.config, self.objects, self.interval)
 
         write.assert_called_once_with("42", "MetaData_FlatData", self.config, None)
-        sleep.assert_called_once_with(3599)
+        sleep.assert_called_once_with(self.scraper.HEALTH_UPDATE_INTERVAL)
 
     def test_scheduler_continues_after_an_error(self):
         with (
@@ -541,10 +583,14 @@ class ScraperTests(unittest.TestCase):
             ) as sleep,
         ):
             self.scraper.run_scraper(self.config, self.objects, self.interval)
-        sleep.assert_called_once_with(899)
+        sleep.assert_called_once_with(self.scraper.HEALTH_UPDATE_INTERVAL)
 
     def test_scheduler_runs_immediately_at_due_boundaries(self):
-        for now, expected_wait in ((3700, 0), (7300, 0), (3701, 3599)):
+        for now, expected_wait in (
+            (3700, 0),
+            (7300, 0),
+            (3701, self.scraper.HEALTH_UPDATE_INTERVAL),
+        ):
             with self.subTest(now=now):
                 with (
                     patch.object(self.scraper, "get_data", return_value=""),
