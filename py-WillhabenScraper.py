@@ -3,6 +3,8 @@ import time
 import configparser
 import argparse
 import signal
+import logging
+from urllib.parse import urlsplit
 from collections import Counter
 from math import ceil
 from statistics import mean, median
@@ -13,6 +15,14 @@ from influxdb_client import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 HTTP_TIMEOUT = 30
+LOGGER = logging.getLogger(__name__)
+
+
+def source_host(url):
+    try:
+        return urlsplit(url).hostname or "unknown host"
+    except ValueError:
+        return "invalid URL"
 
 
 class ScrapingObject:
@@ -99,22 +109,27 @@ def get_data(url, regex, operation):
             timeout=HTTP_TIMEOUT,
         ) as response:
             if response.status_code != 200:
-                print(f"Error: {response.status_code} for {url}")
+                LOGGER.warning(
+                    "HTTP %s from %s", response.status_code, source_host(url)
+                )
                 return ""
             content = response.content.decode("utf-8")
     except (requests.RequestException, UnicodeError) as error:
-        print(f"Error fetching {url}: {error}")
+        LOGGER.warning(
+            "Fetch failed for %s (%s)", source_host(url), type(error).__name__
+        )
         return ""
 
     matches = re.findall(regex, content)
-    print(f"Got {len(matches)} matches for {url}")
-    print(f"Got {operation} operation for {url}")
+    LOGGER.debug(
+        "Matched %d values from %s using %r", len(matches), source_host(url), operation
+    )
     if not matches:
         return ""
     try:
         values = [int(match) for match in matches]
     except (TypeError, ValueError):
-        print(f"Error: Non-integer matches for {url}")
+        LOGGER.warning("Non-integer matches from %s", source_host(url))
         return ""
     if operation == "average":
         value = int(mean(values))
@@ -129,7 +144,7 @@ def get_data(url, regex, operation):
     else:
         value = min(values)
     data = str(value)
-    print(f"Got data {data} for {url}")
+    LOGGER.debug("Aggregate from %s: %s", source_host(url), data)
 
     return data
 
@@ -168,12 +183,19 @@ def run_scraper(config, objects, interval):
                         scraping_object.operation,
                     )
 
-                    print(f"Got data {data} for {scraping_object.measurement}")
-
                     if data:
                         write_data(data, scraping_object.measurement, config)
+                        LOGGER.info(
+                            "Wrote measurement %r: %s",
+                            scraping_object.measurement,
+                            data,
+                        )
                 except Exception as err:
-                    print(f"got error {err}")
+                    LOGGER.warning(
+                        "Search %r failed (%s)",
+                        scraping_object.measurement,
+                        type(err).__name__,
+                    )
 
             next_reading += interval
             now = time.monotonic()
@@ -190,6 +212,9 @@ def handle_termination(_signum, _frame):
 
 
 def main(argv=None):
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
     parser = argparse.ArgumentParser(description="Simple scraper for willHaben data.")
     parser.add_argument(
         "-c", "--conf", required=True, action="append", help="config file"

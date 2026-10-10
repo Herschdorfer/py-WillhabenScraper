@@ -106,6 +106,38 @@ class ScraperTests(unittest.TestCase):
         self.assertEqual(fetch.call_args.kwargs["timeout"], 30)
         response.__exit__.assert_called_once()
 
+    def test_logs_hide_url_credentials_and_query_secrets(self):
+        credentials = ":".join(["example-user", "private-password"])
+        url = f"https://{credentials}@example.com/data?token=private-value"
+        with self.assertLogs(self.scraper.LOGGER, level="DEBUG") as logs:
+            with patch.object(
+                self.scraper.requests, "get", return_value=self.response("42")
+            ):
+                self.assertEqual(self.scraper.get_data(url, r"\d+", ""), "42")
+        output = "\n".join(logs.output)
+        self.assertIn("example.com", output)
+        for sensitive in (
+            "example-user",
+            "private-password",
+            "private-value",
+            "?token",
+        ):
+            self.assertNotIn(sensitive, output)
+
+    def test_logs_hide_exception_message_urls(self):
+        with self.assertLogs(self.scraper.LOGGER, level="WARNING") as logs:
+            with patch.object(
+                self.scraper.requests,
+                "get",
+                side_effect=ConnectionError("token=private-value"),
+            ):
+                self.assertEqual(
+                    self.scraper.get_data("https://example.com", r"\d+", ""), ""
+                )
+        output = "\n".join(logs.output)
+        self.assertIn("ConnectionError", output)
+        self.assertNotIn("private-value", output)
+
     def test_fetch_failure_returns_empty(self):
         with patch.object(
             self.scraper.requests, "get", side_effect=ConnectionError("offline")
