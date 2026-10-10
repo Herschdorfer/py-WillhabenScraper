@@ -32,9 +32,15 @@ jobs:
       - name: Generate image tags and labels
         id: metadata
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
         with:
           images: ghcr.io/${{ github.repository }}
           flavor: latest=false
+          labels: |
+            org.opencontainers.image.title=web-metrics-scraper
+            org.opencontainers.image.description=Configurable HTTP metrics scraper with InfluxDB output
+            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}/blob/master/README.md
           tags: |
             type=raw,value=${{ github.event.release.tag_name }}
             type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
@@ -46,5 +52,6 @@ jobs:
           push: true
           tags: ${{ steps.metadata.outputs.tags }}
           labels: ${{ steps.metadata.outputs.labels }}
+          annotations: ${{ steps.metadata.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

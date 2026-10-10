@@ -9,7 +9,7 @@ from requests.exceptions import ConnectionError, Timeout
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / "py-WillhabenScraper.py"
+SCRIPT = ROOT / "web_metrics_scraper.py"
 
 
 class ScraperTests(unittest.TestCase):
@@ -557,6 +557,18 @@ class ScraperTests(unittest.TestCase):
                 ):
                     self.scraper.run_scraper(self.config, self.objects, self.interval)
                 sleep.assert_called_once_with(expected_wait)
+
+    def test_legacy_launcher_remains_compatible(self):
+        result = subprocess.run(
+            [sys.executable, str(ROOT / "py-WillhabenScraper.py"), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("web-metrics-scraper", result.stdout)
+        self.assertIn("--conf", result.stdout)
 
     def test_cli_help(self):
         result = subprocess.run(
