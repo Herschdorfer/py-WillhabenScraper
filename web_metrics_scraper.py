@@ -316,10 +316,13 @@ def write_data(data, measurement, config, write_api=None):
 
 def run_scraper(config, objects, interval, http_client=None, write_api=None):
     next_reading = time.monotonic()
+    request_counts = Counter((obj.url, obj.user_agent) for obj in objects)
     try:
         while True:
             response_cache = {}
+            remaining_requests = request_counts.copy()
             for scraping_object in objects:
+                request_key = (scraping_object.url, scraping_object.user_agent)
                 try:
                     data = get_data(
                         scraping_object.url,
@@ -327,7 +330,9 @@ def run_scraper(config, objects, interval, http_client=None, write_api=None):
                         scraping_object.operation,
                         http_client=http_client,
                         user_agent=scraping_object.user_agent,
-                        response_cache=response_cache,
+                        response_cache=(
+                            response_cache if request_counts[request_key] > 1 else None
+                        ),
                     )
 
                     if data:
@@ -361,6 +366,10 @@ def run_scraper(config, objects, interval, http_client=None, write_api=None):
                         scraping_object.measurement,
                         type(err).__name__,
                     )
+                finally:
+                    remaining_requests[request_key] -= 1
+                    if remaining_requests[request_key] == 0:
+                        response_cache.pop(request_key, None)
 
             next_reading += interval
             now = time.monotonic()

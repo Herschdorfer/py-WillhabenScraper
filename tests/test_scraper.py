@@ -593,7 +593,15 @@ class ScraperTests(unittest.TestCase):
         ]
         session = MagicMock()
         session.get.return_value = self.response("10 20")
+        real_get_data = self.scraper.get_data
+        response_caches = []
+
+        def capture_response_cache(*args, **kwargs):
+            response_caches.append(kwargs["response_cache"])
+            return real_get_data(*args, **kwargs)
+
         with (
+            patch.object(self.scraper, "get_data", side_effect=capture_response_cache),
             patch.object(self.scraper, "write_data") as write,
             patch.object(self.scraper.time, "monotonic", side_effect=[100, 101]),
             patch.object(self.scraper.time, "sleep", side_effect=KeyboardInterrupt),
@@ -603,30 +611,54 @@ class ScraperTests(unittest.TestCase):
             )
 
         session.get.assert_called_once()
+        self.assertIs(response_caches[0], response_caches[1])
+        self.assertEqual(response_caches[0], {})
         self.assertEqual([call.args[0] for call in write.call_args_list], ["10", "20"])
 
-    def test_scheduler_skips_values_outside_configured_bounds(self):
-        scraping_object = self.scraper.load_search(
-            "1",
-            {
-                "url": "https://example.com",
-                "regex": r"\d+",
-                "measurement": "bounded_metric",
-                "min_value": "20",
-                "max_value": "60",
-            },
-        )
+    def test_scheduler_does_not_cache_single_use_urls(self):
         with (
-            patch.object(self.scraper, "get_data", return_value="10"),
+            patch.object(self.scraper, "get_data", return_value="42") as get_data,
+            patch.object(self.scraper, "write_data"),
+            patch.object(self.scraper.time, "monotonic", side_effect=[100, 101]),
+            patch.object(self.scraper.time, "sleep", side_effect=KeyboardInterrupt),
+        ):
+            self.scraper.run_scraper(self.config, self.objects, self.interval)
+
+        self.assertTrue(
+            all(
+                call.kwargs["response_cache"] is None
+                for call in get_data.call_args_list
+            )
+        )
+
+    def test_scheduler_skips_values_outside_configured_bounds(self):
+        values = ("20", "60", "61", "19")
+        scraping_objects = [
+            self.scraper.load_search(
+                str(index),
+                {
+                    "url": f"https://example.com/{index}",
+                    "regex": r"\d+",
+                    "measurement": f"bounded_metric_{index}",
+                    "min_value": "20",
+                    "max_value": "60",
+                },
+            )
+            for index in range(1, len(values) + 1)
+        ]
+        with (
+            patch.object(self.scraper, "get_data", side_effect=values),
             patch.object(self.scraper, "write_data") as write,
             patch.object(self.scraper.time, "monotonic", side_effect=[100, 101]),
             patch.object(self.scraper.time, "sleep", side_effect=KeyboardInterrupt),
             self.assertLogs(self.scraper.LOGGER, level="WARNING") as logs,
         ):
-            self.scraper.run_scraper(self.config, [scraping_object], self.interval)
+            self.scraper.run_scraper(self.config, scraping_objects, self.interval)
 
-        write.assert_not_called()
-        self.assertIn("outside configured bounds", "\n".join(logs.output))
+        self.assertEqual([call.args[0] for call in write.call_args_list], ["20", "60"])
+        self.assertEqual(
+            sum("outside configured bounds" in entry for entry in logs.output), 2
+        )
 
     def test_scheduler_skips_failed_fetch_and_keeps_processing(self):
         with (
