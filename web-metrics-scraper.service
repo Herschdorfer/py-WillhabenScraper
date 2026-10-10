@@ -1,0 +1,12 @@
+[Unit]
+Description=Configurable web metrics to InfluxDB
+After=multi-user.target
+
+[Service]
+Type=simple
+WorkingDirectory=/path/to/installation/web-metrics-scraper
+ExecStart=/path/to/installation/web-metrics-scraper/.venv/bin/python /path/to/installation/web-metrics-scraper/web_metrics_scraper.py -c /path/to/config.ini
+Restart=on-abort
+
+[Install]
+WantedBy=multi-user.target

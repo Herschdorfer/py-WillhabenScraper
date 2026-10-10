@@ -57,9 +57,9 @@ jobs:
           context: .
           load: true
           push: false
-          tags: willhabenscraper:ci
+          tags: web-metrics-scraper:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
       - name: Check container entry point
-        run: docker run --rm willhabenscraper:ci --help
+        run: docker run --rm web-metrics-scraper:ci --help
