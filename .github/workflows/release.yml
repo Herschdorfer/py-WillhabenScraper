@@ -41,6 +41,10 @@ jobs:
             org.opencontainers.image.title=web-metrics-scraper
             org.opencontainers.image.description=Configurable HTTP metrics scraper with InfluxDB output
             org.opencontainers.image.documentation=https://github.com/${{ github.repository }}/blob/master/README.md
+          annotations: |
+            org.opencontainers.image.title=web-metrics-scraper
+            org.opencontainers.image.description=Configurable HTTP metrics scraper with InfluxDB output
+            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}/blob/master/README.md
           tags: |
             type=raw,value=${{ github.event.release.tag_name }}
             type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
