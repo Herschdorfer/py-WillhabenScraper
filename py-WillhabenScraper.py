@@ -17,6 +17,7 @@ from influxdb_client import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 
 HTTP_TIMEOUT = 30
+MAX_RESPONSE_BYTES = 10 * 1024 * 1024
 LOGGER = logging.getLogger(__name__)
 
 
@@ -130,6 +131,18 @@ def create_http_session():
     return session
 
 
+def read_response(response):
+    encoding = response.headers.get("Content-Encoding", "identity").strip().lower()
+    if encoding not in ("", "identity"):
+        raise requests.RequestException("Encoded responses are not supported")
+    content = bytearray()
+    for chunk in response.iter_content(chunk_size=65536):
+        if len(content) + len(chunk) > MAX_RESPONSE_BYTES:
+            raise requests.RequestException("Response size limit exceeded")
+        content.extend(chunk)
+    return content.decode("utf-8")
+
+
 def get_data(url, regex, operation, http_client=None):
     """
     Retrieves data from a given URL using a regular expression.
@@ -149,16 +162,18 @@ def get_data(url, regex, operation, http_client=None):
         with transport.get(
             url,
             headers={
+                "Accept-Encoding": "identity",
                 "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
             },
             timeout=HTTP_TIMEOUT,
+            stream=True,
         ) as response:
             if response.status_code != 200:
                 LOGGER.warning(
                     "HTTP %s from %s", response.status_code, source_host(url)
                 )
                 return ""
-            content = response.content.decode("utf-8")
+            content = read_response(response)
     except (requests.RequestException, UnicodeError) as error:
         LOGGER.warning(
             "Fetch failed for %s (%s)", source_host(url), type(error).__name__

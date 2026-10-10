@@ -30,8 +30,11 @@ class ScraperTests(unittest.TestCase):
             return self.scraper.load_config([str(path)])
 
     def response(self, content, status=200):
-        response = MagicMock(status_code=status, content=content.encode("utf-8"))
+        response = MagicMock(
+            status_code=status, content=content.encode("utf-8"), headers={}
+        )
         response.__enter__.return_value = response
+        response.iter_content.side_effect = lambda chunk_size: iter([response.content])
         return response
 
     def test_aggregation_operations(self):
@@ -207,6 +210,51 @@ class ScraperTests(unittest.TestCase):
                 self.scraper.get_data("https://example.com", r"\d+", ""), ""
             )
         response.__exit__.assert_called_once()
+
+    def test_response_size_boundary_accepts_chunked_body(self):
+        response = self.response("")
+        response.iter_content.side_effect = lambda chunk_size: iter([b"12", b"", b"34"])
+        with (
+            patch.object(self.scraper, "MAX_RESPONSE_BYTES", 4),
+            patch.object(self.scraper.requests, "get", return_value=response) as fetch,
+        ):
+            self.assertEqual(
+                self.scraper.get_data("https://example.com", r"\d+", ""), "1234"
+            )
+        self.assertTrue(fetch.call_args.kwargs["stream"])
+        response.__exit__.assert_called_once()
+
+    def test_oversized_response_is_skipped_and_closed_early(self):
+        response = self.response("")
+        chunks = iter([b"12", b"345", b"not-read"])
+        response.iter_content.side_effect = None
+        response.iter_content.return_value = chunks
+        with (
+            patch.object(self.scraper, "MAX_RESPONSE_BYTES", 4),
+            patch.object(self.scraper.requests, "get", return_value=response),
+        ):
+            self.assertEqual(
+                self.scraper.get_data("https://example.com", r"\d+", ""), ""
+            )
+        self.assertEqual(next(chunks), b"not-read")
+        response.__exit__.assert_called_once()
+
+    def test_encoded_responses_are_rejected_before_decoding(self):
+        for encoding in ("gzip", "deflate", "br", "gzip, deflate"):
+            with self.subTest(encoding=encoding):
+                response = self.response("")
+                response.headers = {"Content-Encoding": encoding}
+                with patch.object(
+                    self.scraper.requests, "get", return_value=response
+                ) as fetch:
+                    self.assertEqual(
+                        self.scraper.get_data("https://example.com", r"\d+", ""), ""
+                    )
+                self.assertEqual(
+                    fetch.call_args.kwargs["headers"]["Accept-Encoding"], "identity"
+                )
+                response.iter_content.assert_not_called()
+                response.__exit__.assert_called_once()
 
     def test_empty_response_returns_empty(self):
         response = self.response("")
