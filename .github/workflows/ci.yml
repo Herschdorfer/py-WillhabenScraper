@@ -31,6 +31,9 @@ jobs:
       - name: Check dependency compatibility
         run: python -m pip check
 
+      - name: Audit runtime dependencies
+        run: python -m pip_audit -r requirements.txt
+
       - name: Run pre-commit checks
         run: python -m pre_commit run --all-files --show-diff-on-failure
 
