@@ -2,7 +2,7 @@
 token  = example-db
 org    = example-org
 bucket = example-bucket
-server = ip
+server = http://localhost:8086
 
 [Scraper]
 # seconds between two scraping runs (default 3600)
