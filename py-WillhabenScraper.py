@@ -10,6 +10,8 @@ from math import ceil
 from statistics import mean, median
 import influxdb_client
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from influxdb_client import Point
 from influxdb_client.client.write_api import SYNCHRONOUS
@@ -88,7 +90,27 @@ def load_config(paths):
     return config, objects, interval
 
 
-def get_data(url, regex, operation):
+def create_http_session():
+    session = requests.Session()
+    retry = Retry(
+        total=2,
+        connect=2,
+        read=0,
+        status=2,
+        backoff_factor=1,
+        backoff_max=4,
+        status_forcelist=(429, 502, 503, 504),
+        allowed_methods=frozenset({"GET"}),
+        respect_retry_after_header=False,
+        raise_on_status=False,
+    )
+    adapter = HTTPAdapter(max_retries=retry)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
+
+
+def get_data(url, regex, operation, http_client=None):
     """
     Retrieves data from a given URL using a regular expression.
 
@@ -96,12 +118,15 @@ def get_data(url, regex, operation):
         url (str): The URL to scrape data from.
         regex (str): The regular expression pattern to search for in the scraped data.
         operation (str): The aggregation operation to perform on integer matches.
+        http_client: Optional requests-compatible object with a get method.
+            Defaults to the requests module when omitted.
 
     Returns:
         str: The integer aggregate, or an empty string when there is no usable data.
     """
+    transport = http_client if http_client is not None else requests
     try:
-        with requests.get(
+        with transport.get(
             url,
             headers={
                 "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36",
@@ -171,7 +196,7 @@ def write_data(data, measurement, config):
         write_api.write(bucket=bucket, record=point)
 
 
-def run_scraper(config, objects, interval):
+def run_scraper(config, objects, interval, http_client=None):
     next_reading = time.monotonic()
     try:
         while True:
@@ -181,6 +206,7 @@ def run_scraper(config, objects, interval):
                         scraping_object.url,
                         scraping_object.regex,
                         scraping_object.operation,
+                        http_client=http_client,
                     )
 
                     if data:
@@ -227,7 +253,8 @@ def main(argv=None):
     previous_handler = signal.getsignal(signal.SIGTERM)
     try:
         signal.signal(signal.SIGTERM, handle_termination)
-        run_scraper(config, objects, interval)
+        with create_http_session() as http_client:
+            run_scraper(config, objects, interval, http_client)
     except KeyboardInterrupt:
         pass
     finally:
