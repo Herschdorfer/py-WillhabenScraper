@@ -46,6 +46,7 @@ CI runs on pushes and pull requests using Python 3.13, matching the Docker image
 It runs the same hooks, checks dependency compatibility, runs the tests, then
 builds the Docker image and smoke-tests its command-line entry point.
 Release publishing runs these checks first and only pushes an image if they pass.
+CI also audits the runtime dependency tree with pip-audit for known security advisories.
 
 Dependabot checks runtime and development Python dependencies, GitHub Actions,
 and the Docker base image weekly. Minor and patch updates are grouped per
