@@ -174,29 +174,37 @@ def get_data(url, regex, operation, http_client=None):
     return data
 
 
-def write_data(data, measurement, config):
+def create_influx_client(config):
+    settings = config["InfluxDB"]
+    return influxdb_client.InfluxDBClient(
+        url=settings["server"], token=settings["token"], org=settings["org"]
+    )
+
+
+def write_data(data, measurement, config, write_api=None):
     """
     Writes data to InfluxDB.
 
     Args:
         data: The data to be written.
         measurement: The measurement name for the data.
+        config: The loaded InfluxDB connection and bucket settings.
+        write_api: Optional shared synchronous writer. A temporary client is used
+            when omitted.
 
     Returns:
         None
     """
-    token = config["InfluxDB"]["token"]
-    org = config["InfluxDB"]["org"]
-    server = config["InfluxDB"]["server"]
     bucket = config["InfluxDB"]["bucket"]
-
-    with influxdb_client.InfluxDBClient(url=server, token=token, org=org) as client:
-        write_api = client.write_api(write_options=SYNCHRONOUS)
-        point = Point(measurement).field("value", int(data))
+    point = Point(measurement).field("value", int(data))
+    if write_api is not None:
         write_api.write(bucket=bucket, record=point)
+        return
+    with create_influx_client(config) as client:
+        client.write_api(write_options=SYNCHRONOUS).write(bucket=bucket, record=point)
 
 
-def run_scraper(config, objects, interval, http_client=None):
+def run_scraper(config, objects, interval, http_client=None, write_api=None):
     next_reading = time.monotonic()
     try:
         while True:
@@ -210,7 +218,7 @@ def run_scraper(config, objects, interval, http_client=None):
                     )
 
                     if data:
-                        write_data(data, scraping_object.measurement, config)
+                        write_data(data, scraping_object.measurement, config, write_api)
                         LOGGER.info(
                             "Wrote measurement %r: %s",
                             scraping_object.measurement,
@@ -253,8 +261,12 @@ def main(argv=None):
     previous_handler = signal.getsignal(signal.SIGTERM)
     try:
         signal.signal(signal.SIGTERM, handle_termination)
-        with create_http_session() as http_client:
-            run_scraper(config, objects, interval, http_client)
+        with (
+            create_http_session() as http_client,
+            create_influx_client(config) as influx_client,
+            influx_client.write_api(write_options=SYNCHRONOUS) as write_api,
+        ):
+            run_scraper(config, objects, interval, http_client, write_api)
     except KeyboardInterrupt:
         pass
     finally:
